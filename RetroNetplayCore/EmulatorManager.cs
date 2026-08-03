@@ -83,6 +83,9 @@ namespace RetroNetplayCore.Emulator
                     11 => (ushort)XInputButtonFlags.RightShoulder, // Libretro R1 (ID 11)
                     14 => (ushort)XInputButtonFlags.LeftThumb,     // Libretro L3 (ID 14)
                     15 => (ushort)XInputButtonFlags.RightThumb,    // Libretro R3 (ID 15)
+
+                    // Libretro ID 16 is explicitly reserved for the Menu/Guide/Home button interface
+                    16 => 0x0400, // 0x0400 matches your XINPUT_GAMEPAD_GUIDE bitmask
                     _ => 0
                 };
 

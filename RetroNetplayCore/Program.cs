@@ -92,14 +92,6 @@ namespace RetroNetplayCore
                         // D. Feed both input tracks into the emulator and run the unmanaged 60Hz tick
                         emulator.UpdateFrameStates(localPacket, remotePacket);
 
-                        // Optional: Print telemetry for verification
-                        if (remotePacket.Buttons != 0 || localPacket.Buttons != 0)
-                        {
-                            Console.ForegroundColor = ConsoleColor.Yellow;
-                            Console.WriteLine($"[Frame {localFrameCounter}] Core Ticked. Local Buttons: {(XInputButtonFlags)localPacket.Buttons} | Remote Buttons: {(XInputButtonFlags)remotePacket.Buttons}");
-                            Console.ResetColor();
-                        }
-
                         localFrameCounter++;
                         nextFrameTick += ticksPerFrame;
                     }

@@ -82,8 +82,9 @@ namespace RetroNetplayCore
             _wasGuidePressedLastFrame = isGuidePressed;
 
             // 2. Build the Universal Packet with absolute raw memory copy
-            packet.Buttons = (ushort)(rawButtons & ~XINPUT_GAMEPAD_GUIDE);
-            
+            // Keep the Guide Button flag raw within the shared data stream
+            packet.Buttons = rawButtons;
+
             // Raw Deadzone Bitwise Branching (Inline optimized)
             packet.LeftStickX = Math.Abs((int)gamepad.sThumbLX) < AnalogDeadzone ? (short)0 : gamepad.sThumbLX;
             packet.LeftStickY = Math.Abs((int)gamepad.sThumbLY) < AnalogDeadzone ? (short)0 : gamepad.sThumbLY;

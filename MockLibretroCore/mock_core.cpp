@@ -81,40 +81,58 @@ extern "C" {
         static uint32_t total_frames = 0;
         total_frames++;
 
-        // Process both player slots explicitly
+        // --- 1. EXPLICIT MONITORING FOR INTERACTION ALERTS ---
+        // Libretro Joypad ID 16 is our Guide Button slot
+        bool p1_guide_pressed = (input_state_cb(0, 1, 0, 16) != 0);
+        bool p2_guide_pressed = (input_state_cb(1, 1, 0, 16) != 0);
+
+        if (p1_guide_pressed || p2_guide_pressed) {
+            std::cout << "\n========================================================";
+            std::cout << "\n⚡ [GUIDE ALERT] - FRAME TICK: " << total_frames;
+            std::cout << "\n========================================================\n";
+
+            // Player 1 Guide -> Bright Green (\033[92m)
+            if (p1_guide_pressed) {
+                std::cout << "\033[92m[P1 HARDWARE SIGNALLING] >>> CENTER MODE/GUIDE BUTTON CLICKED <<<\033[0m\n";
+            }
+
+            // Player 2 Guide -> Orange (\033[38;5;208m)
+            if (p2_guide_pressed) {
+                std::cout << "\033[38;5;208m[P2 HARDWARE SIGNALLING] >>> CENTER MODE/GUIDE BUTTON CLICKED <<<\033[0m\n";
+            }
+            std::cout << "========================================================\n\n";
+        }
+
+        // --- 2. STANDARD DUAL-PLAYER RUNTIME MATRIX LOGGING ---
         for (unsigned port = 0; port < 2; port++) {
             std::string pressed_buttons = "";
             bool active = false;
 
-            // 1. Gather all 16 digital buttons
-            for (unsigned i = 0; i < 16; i++) {
-                if (input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, i) != 0) {
-                    // If it's a trigger slot, skip appending to digital string text since we print raw values below
-                    if (i == 12 || i == 13) continue;
+            // Scan all 17 button tracks (0 to 16)
+            for (unsigned i = 0; i < 17; i++) {
+                if (input_state_cb(port, 1, 0, i) != 0) {
+                    // Skip triggers (12/13) and Guide (16) from inline text block
+                    if (i == 12 || i == 13 || i == 16) continue;
                     pressed_buttons += "[" + std::string(BUTTON_NAMES[i]) + "] ";
                     active = true;
                 }
             }
 
-            // 2. Extract Analogue Sticks
-            int16_t lx = input_state_cb(port, RETRO_DEVICE_ANALOG, 0, 0);
-            int16_t ly = input_state_cb(port, RETRO_DEVICE_ANALOG, 0, 1);
-            int16_t rx = input_state_cb(port, RETRO_DEVICE_ANALOG, 1, 0);
-            int16_t ry = input_state_cb(port, RETRO_DEVICE_ANALOG, 1, 1);
+            int16_t lx = input_state_cb(port, 2, 0, 0);
+            int16_t ly = input_state_cb(port, 2, 0, 1);
+            int16_t rx = input_state_cb(port, 2, 1, 0);
+            int16_t ry = input_state_cb(port, 2, 1, 1);
 
-            // 3. Extract Raw Analogue Trigger Depths
-            int16_t l_trig = input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, 12); // L2 Depth
-            int16_t r_trig = input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, 13); // R2 Depth
+            int16_t l_trig = input_state_cb(port, 1, 0, 12);
+            int16_t r_trig = input_state_cb(port, 1, 0, 13);
 
-            // Threshold check for active state output
             bool stick_moved = (abs(lx) > 1000 || abs(ly) > 1000 || abs(rx) > 1000 || abs(ry) > 1000);
-            bool triggers_pulled = (l_trig > 5 || r_trig > 5); // Exclude minor trace sensor noise
+            bool triggers_pulled = (l_trig > 5 || r_trig > 5);
 
             if (stick_moved || triggers_pulled) active = true;
 
-            // 4. Output lines matching your custom color profiles
             if (active) {
-                // Player 1 line -> Cyan
+                // Player 1 Normal Telemetry Line -> Cyan
                 if (port == 0) {
                     std::cout << "\033[96m[P1 LOCAL]  Frame: " << total_frames
                         << " | Buttons: " << (pressed_buttons.empty() ? "None " : pressed_buttons)
@@ -122,7 +140,7 @@ extern "C" {
                         << "| RS: (" << rx << "," << ry << ") "
                         << "| Triggers: L: " << l_trig << " / R: " << r_trig << "\033[0m\n";
                 }
-                // Player 2 line -> Gold/Yellow
+                // Player 2 Normal Telemetry Line -> Gold/Yellow
                 else if (port == 1) {
                     std::cout << "\033[93m[P2 REMOTE] Frame: " << total_frames
                         << " | Buttons: " << (pressed_buttons.empty() ? "None " : pressed_buttons)
