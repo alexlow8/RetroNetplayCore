@@ -1,22 +1,21 @@
 #include <iostream>
+#include <cmath>
+#include <string>
 
-// Standard Libretro function pointer definitions matching our C# delegate contracts
+// Standard Libretro function pointer definitions
 typedef void (*retro_video_refresh_t)(const void* data, unsigned width, unsigned height, size_t pitch);
 typedef void (*retro_input_poll_t)(void);
 typedef int16_t(*retro_input_state_t)(unsigned port, unsigned device, unsigned index, unsigned id);
 
-// Static callback references assigned by C#
 static retro_video_refresh_t video_cb = nullptr;
 static retro_input_poll_t input_poll_cb = nullptr;
 static retro_input_state_t input_state_cb = nullptr;
 
-// Constant matches LibretroConstants.RETRO_DEVICE_JOYPAD
 const unsigned RETRO_DEVICE_JOYPAD = 1;
+const unsigned RETRO_DEVICE_ANALOG = 2;
 
-// Libretro Button IDs
-const unsigned BUTTON_A = 8;
-const unsigned BUTTON_B = 0;
-const unsigned BUTTON_START = 3;
+// Libretro Button IDs for Mapping Matrix
+const char* BUTTON_NAMES[] = { "B", "Y", "Select", "Start", "Up", "Down", "Left", "Right", "A", "X", "L", "R", "L2", "R2", "L3", "R3" };
 
 extern "C" {
 
@@ -76,25 +75,61 @@ extern "C" {
     }
 
     __declspec(dllexport) void retro_run(void) {
-        if (input_poll_cb) {
-            input_poll_cb();
-        }
+        if (input_poll_cb) input_poll_cb();
+        if (!input_state_cb) return;
 
-        if (input_state_cb) {
-            // Sample digital buttons
-            bool p1_A = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, BUTTON_A) != 0;
-            bool p1_B = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, BUTTON_B) != 0;
+        static uint32_t total_frames = 0;
+        total_frames++;
 
-            // Sample Analogue Sticks (Device Type = 2)
-            // Index 0 (Left Stick), Axis 0 (X), Axis 1 (Y)
-            int16_t p1_LX = input_state_cb(0, 2, 0, 0);
-            int16_t p1_LY = input_state_cb(0, 2, 0, 1);
+        // Process both player slots explicitly
+        for (unsigned port = 0; port < 2; port++) {
+            std::string pressed_buttons = "";
+            bool active = false;
 
-            // Print telemetry if buttons are pressed OR if sticks move outside a tiny noise threshold
-            if (p1_A || p1_B || abs(p1_LX) > 1000 || abs(p1_LY) > 1000) {
-                std::cout << "[Mock Core Frame Tick] "
-                    << "P1 Buttons: [A:" << (p1_A ? "X" : "_") << " B:" << (p1_B ? "X" : "_") << "] | "
-                    << "P1 Left Stick: (" << p1_LX << ", " << p1_LY << ")\n";
+            // 1. Gather all 16 digital buttons
+            for (unsigned i = 0; i < 16; i++) {
+                if (input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, i) != 0) {
+                    // If it's a trigger slot, skip appending to digital string text since we print raw values below
+                    if (i == 12 || i == 13) continue;
+                    pressed_buttons += "[" + std::string(BUTTON_NAMES[i]) + "] ";
+                    active = true;
+                }
+            }
+
+            // 2. Extract Analogue Sticks
+            int16_t lx = input_state_cb(port, RETRO_DEVICE_ANALOG, 0, 0);
+            int16_t ly = input_state_cb(port, RETRO_DEVICE_ANALOG, 0, 1);
+            int16_t rx = input_state_cb(port, RETRO_DEVICE_ANALOG, 1, 0);
+            int16_t ry = input_state_cb(port, RETRO_DEVICE_ANALOG, 1, 1);
+
+            // 3. Extract Raw Analogue Trigger Depths
+            int16_t l_trig = input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, 12); // L2 Depth
+            int16_t r_trig = input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, 13); // R2 Depth
+
+            // Threshold check for active state output
+            bool stick_moved = (abs(lx) > 1000 || abs(ly) > 1000 || abs(rx) > 1000 || abs(ry) > 1000);
+            bool triggers_pulled = (l_trig > 5 || r_trig > 5); // Exclude minor trace sensor noise
+
+            if (stick_moved || triggers_pulled) active = true;
+
+            // 4. Output lines matching your custom color profiles
+            if (active) {
+                // Player 1 line -> Cyan
+                if (port == 0) {
+                    std::cout << "\033[96m[P1 LOCAL]  Frame: " << total_frames
+                        << " | Buttons: " << (pressed_buttons.empty() ? "None " : pressed_buttons)
+                        << "| LS: (" << lx << "," << ly << ") "
+                        << "| RS: (" << rx << "," << ry << ") "
+                        << "| Triggers: L: " << l_trig << " / R: " << r_trig << "\033[0m\n";
+                }
+                // Player 2 line -> Gold/Yellow
+                else if (port == 1) {
+                    std::cout << "\033[93m[P2 REMOTE] Frame: " << total_frames
+                        << " | Buttons: " << (pressed_buttons.empty() ? "None " : pressed_buttons)
+                        << "| LS: (" << lx << "," << ly << ") "
+                        << "| RS: (" << rx << "," << ry << ") "
+                        << "| Triggers: L: " << l_trig << " / R: " << r_trig << "\033[0m\n";
+                }
             }
         }
     }

@@ -10,6 +10,10 @@
     <OptimizationPreference>Speed</OptimizationPreference>
     <IlcGenerateCompleteTypeMetadata>false</IlcGenerateCompleteTypeMetadata>
     <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Force compiling to the exact folder without appending sub-directories -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
   </PropertyGroup>
 
   <ItemGroup>

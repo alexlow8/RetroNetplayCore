@@ -1,7 +1,6 @@
-﻿using System;
+﻿using RetroNetplayCore.Emulator; // Bring in our newly decoupled emulator namespace
 using System.Runtime.InteropServices;
-using System.Threading;
-using RetroNetplayCore.Emulator; // Bring in our newly decoupled emulator namespace
+using System.Text.Json;
 
 namespace RetroNetplayCore
 {
@@ -20,19 +19,38 @@ namespace RetroNetplayCore
 
             try
             {
-                // 1. Gather configuration details
-                Console.Write("Enter your LOCAL port (e.g., 8000): ");
-                int localPort = int.Parse(Console.ReadLine() ?? "8000");
+                // --- REPLACE YOUR CHOSEN CONFIGURATION BLOCK INSIDE PROGRAM.CS WITH THIS ---
+                int localPort = 8000;
+                int targetPort = 8001;
+                string corePath = @"Emulators\MockLibretroCore.dll";
+                string romPath = "dummy.z64";
 
-                Console.Write("Enter your FRIEND'S port (e.g., 8001): ");
-                int targetPort = int.Parse(Console.ReadLine() ?? "8001");
-
-                // --- NEW EMULATOR CONFIGURATION ---
-                Console.Write("Enter absolute path to Libretro Core DLL: ");
-                string corePath = Console.ReadLine() ?? "mupen64plus_next_libretro.dll";
-
-                Console.Write("Enter absolute path to Game ROM: ");
-                string romPath = Console.ReadLine() ?? "";
+                string configPath = "engine_config.json";
+                if (File.Exists(configPath))
+                {
+                    try
+                    {
+                        string json = File.ReadAllText(configPath);
+                        // Simple unmanaged-safe light parsing loop or quick JSON parse
+                        using (JsonDocument doc = JsonDocument.Parse(json))
+                        {
+                            JsonElement root = doc.RootElement;
+                            localPort = root.GetProperty("LocalPort").GetInt32();
+                            targetPort = root.GetProperty("FriendPort").GetInt32();
+                            corePath = root.GetProperty("CorePath").GetString() ?? corePath;
+                            romPath = root.GetProperty("RomPath").GetString() ?? romPath;
+                        }
+                        Console.WriteLine("📥 Settings successfully loaded from engine_config.json");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Config parse error: {ex.Message}. Reverting to baseline simulation parameters.");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("💡 No engine_config.json detected. Executing with default pipeline configurations.");
+                }
 
                 // 2. Initialize our clean decoupled components
                 InputManager input = new InputManager(0);

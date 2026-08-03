@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    
+    <!-- Force compiling to the exact folder without appending sub-directories -->
+    <BaseOutputPath>C:\Users\Alex\source\repos\RetroNetplayCore\RetroNetplayCore\bin</BaseOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>..\RetroNetplayCore\bin\$(Configuration)\</OutputPath>  </PropertyGroup>
+</Project>

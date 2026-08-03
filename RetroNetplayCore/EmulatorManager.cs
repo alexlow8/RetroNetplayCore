@@ -61,36 +61,51 @@ namespace RetroNetplayCore.Emulator
             // Route between player 1 (local) and player 2 (remote over NetworkLink)
             UniversalInputPacket activePacket = (port == 0) ? _currentLocalInput : _currentRemoteInput;
 
-            // --- 1. HANDLE DIGITAL JOYPAD BUTTONS ---
+            // --- 1. HANDLE DIGITAL JOYPAD METRICS ---
             if (device == LibretroConstants.RETRO_DEVICE_JOYPAD)
             {
                 ushort checkMask = id switch
                 {
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_A => (ushort)XInputButtonFlags.A,
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_B => (ushort)XInputButtonFlags.B,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_B => (ushort)XInputButtonFlags.A,      // Libretro B maps to Xbox A
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_A => (ushort)XInputButtonFlags.B,      // Libretro A maps to Xbox B
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_Y => (ushort)XInputButtonFlags.X,      // Libretro Y maps to Xbox X
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_X => (ushort)XInputButtonFlags.Y,      // Libretro X maps to Xbox Y
+
                     LibretroConstants.RETRO_DEVICE_ID_JOYPAD_START => (ushort)XInputButtonFlags.Start,
                     LibretroConstants.RETRO_DEVICE_ID_JOYPAD_SELECT => (ushort)XInputButtonFlags.Back,
+
                     LibretroConstants.RETRO_DEVICE_ID_JOYPAD_UP => (ushort)XInputButtonFlags.DPadUp,
                     LibretroConstants.RETRO_DEVICE_ID_JOYPAD_DOWN => (ushort)XInputButtonFlags.DPadDown,
                     LibretroConstants.RETRO_DEVICE_ID_JOYPAD_LEFT => (ushort)XInputButtonFlags.DPadLeft,
                     LibretroConstants.RETRO_DEVICE_ID_JOYPAD_RIGHT => (ushort)XInputButtonFlags.DPadRight,
+
+                    10 => (ushort)XInputButtonFlags.LeftShoulder,  // Libretro L1 (ID 10)
+                    11 => (ushort)XInputButtonFlags.RightShoulder, // Libretro R1 (ID 11)
+                    14 => (ushort)XInputButtonFlags.LeftThumb,     // Libretro L3 (ID 14)
+                    15 => (ushort)XInputButtonFlags.RightThumb,    // Libretro R3 (ID 15)
                     _ => 0
                 };
 
-                return (short)((activePacket.Buttons & checkMask) != 0 ? 1 : 0);
+                if (checkMask != 0)
+                {
+                    return (short)((activePacket.Buttons & checkMask) != 0 ? 1 : 0);
+                }
+
+                // --- DYNAMIC SLIDING TRIGGER MAPPING (0 to 255) ---
+                // If Libretro asks for L2 (ID 12) or R2 (ID 13) within the Joypad device spectrum,
+                // we pass back your universal 16-byte raw trigger byte values directly!
+                if (id == 12) return activePacket.LeftTrigger;
+                if (id == 13) return activePacket.RightTrigger;
             }
 
-            // --- 2. HANDLE ANALOGUE CONTROLS (NEW) ---
-            // Libretro Constant: RETRO_DEVICE_ANALOG = 2
-            if (device == 2)
+            // --- 2. HANDLE ANALOGUE THUMBSTICKS ---
+            if (device == 2) // RETRO_DEVICE_ANALOG
             {
-                // index 0 = Left Stick, index 1 = Right Stick
-                if (index == 0)
+                if (index == 0) // Left Stick
                 {
-                    // id 0 = X Axis, id 1 = Y Axis
                     return id == 0 ? activePacket.LeftStickX : activePacket.LeftStickY;
                 }
-                if (index == 1)
+                if (index == 1) // Right Stick
                 {
                     return id == 0 ? activePacket.RightStickX : activePacket.RightStickY;
                 }
