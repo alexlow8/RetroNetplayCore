@@ -40,6 +40,24 @@ extern "C" {
         std::cout << "[Mock Core] Native C++ Core Safely Deinitialized.\n";
     }
 
+    struct retro_system_info {
+        const char* library_name;
+        const char* library_version;
+        const char* valid_extensions;
+        bool need_fullpath;
+        bool block_extract;
+    };
+
+    __declspec(dllexport) void retro_get_system_info(struct retro_system_info* info) {
+        if (info) {
+            info->library_name = "Mock Engine Core";
+            info->library_version = "v1.0.0";
+            info->valid_extensions = "n64|z64";
+            info->need_fullpath = true;
+            info->block_extract = false;
+        }
+    }
+
     // Matches our updated unmanaged pointer-based RetroGameInfo struct
     struct retro_game_info {
         const char* path;
@@ -58,25 +76,25 @@ extern "C" {
     }
 
     __declspec(dllexport) void retro_run(void) {
-        // 1. Tell C# backend to update its physical input mappings
         if (input_poll_cb) {
             input_poll_cb();
         }
 
-        // 2. Sample inputs for Player 1 (Port 0) and Player 2 (Port 1) using the C# callback
         if (input_state_cb) {
+            // Sample digital buttons
             bool p1_A = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, BUTTON_A) != 0;
             bool p1_B = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, BUTTON_B) != 0;
-            bool p1_Start = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, BUTTON_START) != 0;
 
-            bool p2_A = input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, BUTTON_A) != 0;
-            bool p2_B = input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, BUTTON_B) != 0;
+            // Sample Analogue Sticks (Device Type = 2)
+            // Index 0 (Left Stick), Axis 0 (X), Axis 1 (Y)
+            int16_t p1_LX = input_state_cb(0, 2, 0, 0);
+            int16_t p1_LY = input_state_cb(0, 2, 0, 1);
 
-            // 3. Print out the telemetry to prove the Memory Pass works perfectly
-            if (p1_A || p1_B || p1_Start || p2_A || p2_B) {
+            // Print telemetry if buttons are pressed OR if sticks move outside a tiny noise threshold
+            if (p1_A || p1_B || abs(p1_LX) > 1000 || abs(p1_LY) > 1000) {
                 std::cout << "[Mock Core Frame Tick] "
-                    << "P1: [A:" << (p1_A ? "X" : "_") << " B:" << (p1_B ? "X" : "_") << " START:" << (p1_Start ? "X" : "_") << "] | "
-                    << "P2: [A:" << (p2_A ? "X" : "_") << " B:" << (p2_B ? "X" : "_") << "]\n";
+                    << "P1 Buttons: [A:" << (p1_A ? "X" : "_") << " B:" << (p1_B ? "X" : "_") << "] | "
+                    << "P1 Left Stick: (" << p1_LX << ", " << p1_LY << ")\n";
             }
         }
     }

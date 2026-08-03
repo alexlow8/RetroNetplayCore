@@ -58,24 +58,45 @@ namespace RetroNetplayCore.Emulator
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
         private static short OnInputState(uint port, uint device, uint index, uint id)
         {
-            if (device != LibretroConstants.RETRO_DEVICE_JOYPAD) return 0;
-
+            // Route between player 1 (local) and player 2 (remote over NetworkLink)
             UniversalInputPacket activePacket = (port == 0) ? _currentLocalInput : _currentRemoteInput;
 
-            ushort checkMask = id switch
+            // --- 1. HANDLE DIGITAL JOYPAD BUTTONS ---
+            if (device == LibretroConstants.RETRO_DEVICE_JOYPAD)
             {
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_A => (ushort)XInputButtonFlags.A,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_B => (ushort)XInputButtonFlags.B,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_START => (ushort)XInputButtonFlags.Start,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_SELECT => (ushort)XInputButtonFlags.Back,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_UP => (ushort)XInputButtonFlags.DPadUp,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_DOWN => (ushort)XInputButtonFlags.DPadDown,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_LEFT => (ushort)XInputButtonFlags.DPadLeft,
-                LibretroConstants.RETRO_DEVICE_ID_JOYPAD_RIGHT => (ushort)XInputButtonFlags.DPadRight,
-                _ => 0
-            };
+                ushort checkMask = id switch
+                {
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_A => (ushort)XInputButtonFlags.A,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_B => (ushort)XInputButtonFlags.B,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_START => (ushort)XInputButtonFlags.Start,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_SELECT => (ushort)XInputButtonFlags.Back,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_UP => (ushort)XInputButtonFlags.DPadUp,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_DOWN => (ushort)XInputButtonFlags.DPadDown,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_LEFT => (ushort)XInputButtonFlags.DPadLeft,
+                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_RIGHT => (ushort)XInputButtonFlags.DPadRight,
+                    _ => 0
+                };
 
-            return (short)((activePacket.Buttons & checkMask) != 0 ? 1 : 0);
+                return (short)((activePacket.Buttons & checkMask) != 0 ? 1 : 0);
+            }
+
+            // --- 2. HANDLE ANALOGUE CONTROLS (NEW) ---
+            // Libretro Constant: RETRO_DEVICE_ANALOG = 2
+            if (device == 2)
+            {
+                // index 0 = Left Stick, index 1 = Right Stick
+                if (index == 0)
+                {
+                    // id 0 = X Axis, id 1 = Y Axis
+                    return id == 0 ? activePacket.LeftStickX : activePacket.LeftStickY;
+                }
+                if (index == 1)
+                {
+                    return id == 0 ? activePacket.RightStickX : activePacket.RightStickY;
+                }
+            }
+
+            return 0;
         }
     }
 }

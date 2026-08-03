@@ -4,6 +4,6 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="MockLibertoCore/MockLibertoCore.vcxproj" Id="d0c104de-bf9b-48aa-9982-6ad4392f4ca6" />
+  <Project Path="MockLibretroCore/MockLibretroCore.vcxproj" Id="8872768b-3967-4dd8-b78a-c1b20f3e5d11" />
   <Project Path="RetroNetplayCore/RetroNetplayCore.csproj" />
 </Solution>
