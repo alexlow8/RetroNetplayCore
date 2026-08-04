@@ -1,61 +1,96 @@
 ﻿<Window x:Class="RetroNetplayLauncher.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="RetroNetplay Core Configuration Engine" Height="420" Width="480"
-        Background="#1E1E1E" Foreground="#FFFFFF" WindowStartupLocation="CenterScreen" ResizeMode="NoResize">
-        <Grid Margin="20">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        Title="RetroNetplay Launcher" Height="460" Width="450" Background="#F3F3F3" Loaded="Window_Loaded">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-            <!-- Header -->
-            <TextBlock Text="🚀 ENGINE SUBSYSTEM SETUP" FontSize="20" FontWeight="Bold" Foreground="#00FFFF" HorizontalAlignment="Center" Margin="0,0,0,20"/>
-
-            <!-- Form Fields -->
-            <StackPanel Grid.Row="1" VerticalAlignment="Center">
-                <!-- Ports Row -->
-                <Grid Margin="0,5">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Margin="0,0,10,0">
-                        <TextBlock Text="Local Port:" Margin="0,0,0,5" Foreground="#CCCCCC"/>
-                        <TextBox x:Name="TxtLocalPort" Text="8000" Padding="5" Background="#2D2D2D" Foreground="#FFFFFF" BorderBrush="#555555"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                        <TextBlock Text="Friend's Port:" Margin="0,0,0,5" Foreground="#CCCCCC"/>
-                        <TextBox x:Name="TxtFriendPort" Text="8001" Padding="5" Background="#2D2D2D" Foreground="#FFFFFF" BorderBrush="#555555"/>
-                    </StackPanel>
-                </Grid>
-
-                <!-- Core Path Selection -->
-                <TextBlock Text="Libretro Core Library Path (.dll):" Margin="0,15,0,5" Foreground="#CCCCCC"/>
+        <!-- TOP BOX: Setup, Emulator, & Game Configuration -->
+        <GroupBox Header="Session Configuration" Grid.Row="0" Margin="0,0,0,10">
+            <StackPanel Margin="10">
+                <!-- Core and ROM Selectors -->
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="80"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="TxtCorePath" Text="Emulators\MockLibretroCore.dll" Padding="5" Background="#2D2D2D" Foreground="#FFFFFF" BorderBrush="#555555"/>
-                    <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0" Click="BrowseCore_Click" Background="#3D3D3D" Foreground="#FFFFFF"/>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Emulator Selector -->
+                    <TextBlock Text="Emulator Core:" VerticalAlignment="Center" Grid.Row="0" Grid.Column="0" Margin="0,0,10,8"/>
+                    <ComboBox x:Name="EmulatorComboBox" Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,8" SelectionChanged="EmulatorComboBox_SelectionChanged"/>
+
+                    <!-- ROM Selector -->
+                    <TextBlock Text="Game ROM:" VerticalAlignment="Center" Grid.Row="1" Grid.Column="0" Margin="0,0,10,0"/>
+                    <TextBox x:Name="RomPathTxt" Grid.Row="1" Grid.Column="1" IsReadOnly="True" Background="#EAEAEA" VerticalContentAlignment="Center"/>
+                    <Button x:Name="BrowseRomBtn" Content="Browse..." Width="70" Grid.Row="1" Grid.Column="2" Margin="5,0,0,0" Click="BrowseRomBtn_Click"/>
                 </Grid>
 
-                <!-- ROM Path Selection -->
-                <TextBlock Text="Game ROM Path (.z64 / .n64):" Margin="0,15,0,5" Foreground="#CCCCCC"/>
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="80"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="TxtRomPath" Text="dummy.z64" Padding="5" Background="#2D2D2D" Foreground="#FFFFFF" BorderBrush="#555555"/>
-                    <Button Grid.Column="1" Content="Browse..." Margin="5,0,0,0" Click="BrowseRom_Click" Background="#3D3D3D" Foreground="#FFFFFF"/>
-                </Grid>
+                <Separator Margin="0,10,0,10"/>
+
+                <!-- Player Count & Hosting Action -->
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Max Players: " VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <ComboBox x:Name="MaxPlayersComboBox" Width="60" SelectedIndex="0">
+                        <ComboBoxItem Content="2"/>
+                        <ComboBoxItem Content="3"/>
+                        <ComboBoxItem Content="4"/>
+                    </ComboBox>
+
+                    <Button x:Name="HostBtn" Content="Host Session" Width="100" Margin="15,0,0,0" Click="HostBtn_Click" IsEnabled="False"/>
+                </StackPanel>
             </StackPanel>
+        </GroupBox>
 
-            <!-- Boot Button -->
-            <Button Grid.Row="2" Content="LAUNCH HIGH-PERFORMANCE ENGINE" Padding="12" FontSize="14" FontWeight="Bold" 
-                Background="#FFD700" Foreground="#1E1E1E" Click="LaunchEngine_Click" BorderThickness="0"/>
+        <!-- MIDDLE BOX: Joining Controls -->
+        <GroupBox Header="Join Session" Grid.Row="1" Margin="0,0,0,10">
+            <StackPanel Orientation="Horizontal" Margin="10">
+                <TextBlock Text="Room Code: " VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <TextBox x:Name="RoomCodeTxt" Width="100" VerticalContentAlignment="Center" CharacterCasing="Upper" MaxLength="4"/>
+                <Button x:Name="JoinBtn" Content="Join" Width="80" Margin="10,0,0,0" Click="JoinBtn_Click" IsEnabled="False"/>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- LOBBY LIST: Shows Active Roster -->
+        <GroupBox Header="Connected Players Lobby" Grid.Row="2" Margin="0,0,0,10">
+            <Grid Margin="5">
+                <ListBox x:Name="PlayerListBox" Background="White" BorderThickness="0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <!-- We use Margin here on the StackPanel to space out items safely -->
+                            <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
+                                <TextBlock Text="🎮 " Foreground="#4CAF50"/>
+                                <TextBlock Text="{Binding Ip}" FontWeight="Bold"/>
+                                <TextBlock Text=":" Foreground="#888888"/>
+                                <TextBlock Text="{Binding Port}" Foreground="#888888"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <TextBlock x:Name="DisplayRoomCodeTxt" Text="CODE: ----" FontSize="24" FontWeight="Bold" 
+                           HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,5,10,0" Foreground="#2196F3"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- BOTTOM BOX: Action Status -->
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="StatusTxt" Text="Status: Select an emulator and game ROM" VerticalAlignment="Center" Foreground="#666666"/>
+            <Button x:Name="StartGameBtn" Grid.Column="1" Content="Start Emulation" Width="120" Height="30" 
+                    IsEnabled="False" Click="StartGameBtn_Click" Background="#4CAF50" Foreground="White" FontWeight="Bold"/>
         </Grid>
-    </Window>
+    </Grid>
+</Window>
