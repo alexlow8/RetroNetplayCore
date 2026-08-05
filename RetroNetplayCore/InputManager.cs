@@ -52,15 +52,17 @@ namespace RetroNetplayCore
             return XInputGetStateEx(_playerIndex, ref stateEx) == 0;
         }
 
+        /// <summary>
+        /// Captures local physical hardware states directly over the stack as a lean ClientInputPacket.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public UniversalInputPacket CaptureFrame(uint frameId)
+        public ClientInputPacket CaptureFrame(uint frameId)
         {
-            // Direct structural generation over the stack - zero heap allocations
-            UniversalInputPacket packet = new UniversalInputPacket { FrameId = frameId };
+            ClientInputPacket packet = new ClientInputPacket { FrameId = frameId };
 
             XINPUT_STATE_EX stateEx = default;
             int result = XInputGetStateEx(_playerIndex, ref stateEx);
-            
+
             if (result != 0)
             {
                 _isConnected = false;
@@ -81,8 +83,7 @@ namespace RetroNetplayCore
             }
             _wasGuidePressedLastFrame = isGuidePressed;
 
-            // 2. Build the Universal Packet with absolute raw memory copy
-            // Keep the Guide Button flag raw within the shared data stream
+            // 2. Build the packet structure with absolute zero allocations
             packet.Buttons = rawButtons;
 
             // Raw Deadzone Bitwise Branching (Inline optimized)
@@ -90,11 +91,28 @@ namespace RetroNetplayCore
             packet.LeftStickY = Math.Abs((int)gamepad.sThumbLY) < AnalogDeadzone ? (short)0 : gamepad.sThumbLY;
             packet.RightStickX = Math.Abs((int)gamepad.sThumbRX) < AnalogDeadzone ? (short)0 : gamepad.sThumbRX;
             packet.RightStickY = Math.Abs((int)gamepad.sThumbRY) < AnalogDeadzone ? (short)0 : gamepad.sThumbRY;
-            
+
             packet.LeftTrigger = gamepad.bLeftTrigger;
             packet.RightTrigger = gamepad.bRightTrigger;
 
             return packet;
+        }
+
+        /// <summary>
+        /// Helper utility: Extracts inputs for any player from a unified network struct packet.
+        /// Extracted structure can be handed off directly to your Libretro environment loop.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static PlayerInputState ExtractPlayerState(ref HostFramePacket masterPacket, int playerSlot)
+        {
+            switch (playerSlot)
+            {
+                case 0: return masterPacket.Player0;
+                case 1: return masterPacket.Player1;
+                case 2: return masterPacket.Player2;
+                case 3: return masterPacket.Player3;
+                default: return default;
+            }
         }
     }
 }

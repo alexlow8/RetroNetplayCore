@@ -9,8 +9,8 @@ namespace RetroNetplayCore.Emulator
         private readonly LibretroBridge _bridge;
         private readonly RomLoader _romLoader;
 
-        private static UniversalInputPacket _currentLocalInput;
-        private static UniversalInputPacket _currentRemoteInput;
+        // Unified 52-byte master frame layout accessible from the static unmanaged P/Invoke callback
+        private static HostFramePacket _activeMasterPacket;
 
         public EmulatorManager()
         {
@@ -34,11 +34,14 @@ namespace RetroNetplayCore.Emulator
             _bridge.LoadGame((IntPtr)(&gameInfo));
         }
 
+        /// <summary>
+        /// Feeds the unified 4-player master synchronization frame directly into the static tracker and triggers the emulation step.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void UpdateFrameStates(UniversalInputPacket local, UniversalInputPacket remote)
+        public void UpdateFrameStates(ref HostFramePacket masterPacket)
         {
-            _currentLocalInput = local;
-            _currentRemoteInput = remote;
+            // Direct structural block copy over memory - zero allocations
+            _activeMasterPacket = masterPacket;
 
             _bridge.RunFrame();
         }
@@ -58,8 +61,18 @@ namespace RetroNetplayCore.Emulator
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
         private static short OnInputState(uint port, uint device, uint index, uint id)
         {
-            // Route between player 1 (local) and player 2 (remote over NetworkLink)
-            UniversalInputPacket activePacket = (port == 0) ? _currentLocalInput : _currentRemoteInput;
+            // Bounds check to ensure we only read inside our 4 controller ports
+            if (port > 3) return 0;
+
+            // Route dynamically by Port ID straight to our inner network sub-structures
+            PlayerInputState playerState = port switch
+            {
+                0 => _activeMasterPacket.Player0,
+                1 => _activeMasterPacket.Player1,
+                2 => _activeMasterPacket.Player2,
+                3 => _activeMasterPacket.Player3,
+                _ => default
+            };
 
             // --- 1. HANDLE DIGITAL JOYPAD METRICS ---
             if (device == LibretroConstants.RETRO_DEVICE_JOYPAD)
@@ -91,14 +104,12 @@ namespace RetroNetplayCore.Emulator
 
                 if (checkMask != 0)
                 {
-                    return (short)((activePacket.Buttons & checkMask) != 0 ? 1 : 0);
+                    return (short)((playerState.Buttons & checkMask) != 0 ? 1 : 0);
                 }
 
                 // --- DYNAMIC SLIDING TRIGGER MAPPING (0 to 255) ---
-                // If Libretro asks for L2 (ID 12) or R2 (ID 13) within the Joypad device spectrum,
-                // we pass back your universal 16-byte raw trigger byte values directly!
-                if (id == 12) return activePacket.LeftTrigger;
-                if (id == 13) return activePacket.RightTrigger;
+                if (id == 12) return playerState.LeftTrigger;
+                if (id == 13) return playerState.RightTrigger;
             }
 
             // --- 2. HANDLE ANALOGUE THUMBSTICKS ---
@@ -106,11 +117,11 @@ namespace RetroNetplayCore.Emulator
             {
                 if (index == 0) // Left Stick
                 {
-                    return id == 0 ? activePacket.LeftStickX : activePacket.LeftStickY;
+                    return id == 0 ? playerState.LeftStickX : playerState.LeftStickY;
                 }
                 if (index == 1) // Right Stick
                 {
-                    return id == 0 ? activePacket.RightStickX : activePacket.RightStickY;
+                    return id == 0 ? playerState.RightStickX : playerState.RightStickY;
                 }
             }
 
