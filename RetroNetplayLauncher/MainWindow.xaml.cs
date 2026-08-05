@@ -84,7 +84,7 @@ namespace RetroNetplayLauncher
         // --- STEP 3: ROM BROWSER (For standard emulators) ---
         private void BrowseRomBtn_Click(object sender, RoutedEventArgs e)
         {
-            OpenFileDialog openFileDialog = new OpenFileDialog
+            OpenFileDialog openFileDialog = new()
             {
                 Title = "Select Game ROM",
                 Filter = "All Supported Files|*.zip;*.sfc;*.smc;*.n64;*.z64|All Files (*.*)|*.*"
@@ -114,7 +114,12 @@ namespace RetroNetplayLauncher
                 int maxPlayers = 2;
                 if (MaxPlayersComboBox.SelectedItem is ComboBoxItem selectedItem)
                 {
-                    int.TryParse(selectedItem.Content.ToString(), out maxPlayers);
+                    if (int.TryParse(selectedItem.Content.ToString(), out maxPlayers))
+                    {
+                        // Fail-safe default if parsing somehow breaks
+                        maxPlayers = 2;
+                        Console.WriteLine("⚠️ Warning: Max players drop-down parse failed. Defaulting to 2 players.");
+                    }
                 }
 
                 // Initialize our matchmaker client with dynamic port assignment
@@ -129,7 +134,7 @@ namespace RetroNetplayLauncher
 
                 // Update the XAML text displays
                 DisplayRoomCodeTxt.Text = $"CODE: {generatedCode}";
-                StatusTxt.Text = "Status: Lobby open. Connected on dynamic port {_matchmaker.LocalPort}. Waiting for players to join...";
+                StatusTxt.Text = $"Status: Lobby open. Connected on dynamic port {_matchmaker.LocalPort}. Waiting for players to join...";
 
                 // Only the host can press the "Start Emulation" button
                 StartGameBtn.IsEnabled = true;
@@ -215,22 +220,108 @@ namespace RetroNetplayLauncher
         {
             Dispatcher.Invoke(() =>
             {
+                if (_matchmaker == null) return;
+
                 StatusTxt.Text = "Status: Triggering UDP Hole Punching sequence...";
 
                 // Extract our peer list from the UI list box to feed to the hole punch executor
-                System.Collections.Generic.List<PeerEndpoint> peerRoster = new System.Collections.Generic.List<PeerEndpoint>();
+                System.Collections.Generic.List<PeerEndpoint> peerRoster = [];
                 foreach (var item in PlayerListBox.Items)
                 {
                     if (item is PeerEndpoint peer) peerRoster.Add(peer);
                 }
 
                 // Blast the 10 UDP punch packets and release the port
-                _matchmaker?.ExecuteHolePunch(peerRoster);
+                _matchmaker.ExecuteHolePunch(peerRoster);
 
                 StatusTxt.Text = "Status: Connection tunnels pierced! Booting emulation core...";
 
-                // NEXT WEEK WORK: Initialize your unmanaged C# RetroNetplayCore here using the peer data!
-                MessageBox.Show("Lego City Success! Handshake complete. Ready to fire up the C# emulator wrapper loop.", "Information", MessageBoxButton.OK, MessageBoxImage.Information);
+                // Gather selections from your UI controls
+                string selectedCore = EmulatorComboBox.SelectedItem?.ToString() ?? "MockLibretroCore.dll";
+                string relativeCorePath = System.IO.Path.Combine("Emulators", selectedCore);
+                string romPath = RomPathTxt.Text;
+
+                object launchConfig;
+
+                // Use the newly added Matchmaker flag to determine our local network role
+                if (_matchmaker.IsHost)
+                {
+                    // HOST CONFIGURATION: Group all incoming remote peers into matching slot indices
+                    var clientsList = new System.Collections.Generic.List<object>();
+                    int assignedSlot = 1;
+
+                    foreach (var peer in peerRoster)
+                    {
+                        // Skip our own entry (the host is index 0, so we skip it)
+                        if (peer.IsHost) continue;
+
+                        clientsList.Add(new
+                        {
+                            Slot = assignedSlot,
+                            IP = peer.Ip,
+                            peer.Port
+                        });
+                        assignedSlot++;
+                    }
+
+                    launchConfig = new
+                    {
+                        IsHost = true,
+                        _matchmaker.LocalPort,
+                        CorePath = relativeCorePath,
+                        RomPath = romPath,
+                        Clients = clientsList
+                    };
+                }
+                else
+                {
+                    // CLIENT CONFIGURATION: Extract the host connection details explicitly out of index 0
+                    string hostIp = "127.0.0.1";
+                    int hostPort = 8000;
+
+                    if (peerRoster.Count > 0)
+                    {
+                        // Because your Node.js code puts the creator first, index 0 is guaranteed to be the Host!
+                        hostIp = peerRoster[0].Ip;
+                        hostPort = peerRoster[0].Port;
+                    }
+
+                    launchConfig = new
+                    {
+                        IsHost = false,
+                        _matchmaker.LocalPort,
+                        HostAddress = hostIp,
+                        HostPort = hostPort,
+                        CorePath = relativeCorePath,
+                        RomPath = romPath
+                    };
+                }
+
+                try
+                {
+                    // Serialize the anonymous object out into the configuration recipe layout
+                    var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                    string jsonString = System.Text.Json.JsonSerializer.Serialize(launchConfig, options);
+
+                    string targetConfigPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "engine_config.json");
+                    System.IO.File.WriteAllText(targetConfigPath, jsonString);
+
+                    // Bootstrap your unmanaged high-performance console engine
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "RetroNetplayCore.exe",
+                        WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+                        UseShellExecute = true
+                    });
+
+                    StatusTxt.Text = "Status: Emulation active. Gameplay running.";
+                    this.WindowState = WindowState.Minimized;
+                }
+                catch (Exception ex)
+                {
+                    StatusTxt.Text = "Status: Core initialization crash.";
+                    MessageBox.Show($"Could not boot unmanaged engine core: {ex.Message}", "Launch Failure", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             });
         }
     }

@@ -4,11 +4,11 @@ using System.Runtime.InteropServices;
 
 namespace RetroNetplayCore
 {
-    public unsafe class InputManager
+    public unsafe partial class InputManager
     {
         // Direct kernel link bypassing managed wrappers
-        [DllImport("xinput1_4.dll", EntryPoint = "#100")]
-        private static extern int XInputGetStateEx(int userIndex, ref XINPUT_STATE_EX pState);
+        [LibraryImport("xinput1_4.dll", EntryPoint = "#100")]
+        private static partial int XInputGetStateEx(int userIndex, ref XINPUT_STATE_EX pState);
 
         // Native layout matching Windows XInput memory exactly
         [StructLayout(LayoutKind.Sequential)]
@@ -32,6 +32,7 @@ namespace RetroNetplayCore
 
         private const ushort XINPUT_GAMEPAD_GUIDE = 0x0400;
         private const int AnalogDeadzone = 7849;
+        private const byte TriggerDeadzone = 30;
 
         private readonly int _playerIndex;
         private bool _wasGuidePressedLastFrame;
@@ -58,7 +59,7 @@ namespace RetroNetplayCore
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ClientInputPacket CaptureFrame(uint frameId)
         {
-            ClientInputPacket packet = new ClientInputPacket { FrameId = frameId };
+            ClientInputPacket packet = new() { FrameId = frameId };
 
             XINPUT_STATE_EX stateEx = default;
             int result = XInputGetStateEx(_playerIndex, ref stateEx);
@@ -92,8 +93,8 @@ namespace RetroNetplayCore
             packet.RightStickX = Math.Abs((int)gamepad.sThumbRX) < AnalogDeadzone ? (short)0 : gamepad.sThumbRX;
             packet.RightStickY = Math.Abs((int)gamepad.sThumbRY) < AnalogDeadzone ? (short)0 : gamepad.sThumbRY;
 
-            packet.LeftTrigger = gamepad.bLeftTrigger;
-            packet.RightTrigger = gamepad.bRightTrigger;
+            packet.LeftTrigger = gamepad.bLeftTrigger < TriggerDeadzone ? (byte)0 : gamepad.bLeftTrigger;
+            packet.RightTrigger = gamepad.bRightTrigger < TriggerDeadzone ? (byte)0 : gamepad.bRightTrigger;
 
             return packet;
         }
@@ -105,14 +106,14 @@ namespace RetroNetplayCore
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static PlayerInputState ExtractPlayerState(ref HostFramePacket masterPacket, int playerSlot)
         {
-            switch (playerSlot)
+            return playerSlot switch
             {
-                case 0: return masterPacket.Player0;
-                case 1: return masterPacket.Player1;
-                case 2: return masterPacket.Player2;
-                case 3: return masterPacket.Player3;
-                default: return default;
-            }
+                0 => masterPacket.Player0,
+                1 => masterPacket.Player1,
+                2 => masterPacket.Player2,
+                3 => masterPacket.Player3,
+                _ => default,
+            };
         }
     }
 }

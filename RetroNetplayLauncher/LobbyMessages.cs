@@ -23,6 +23,6 @@ namespace RetroNetplayLauncher
     {
         [JsonPropertyName("status")] public string Status { get; set; } = "";
         [JsonPropertyName("playerIndex")] public int PlayerIndex { get; set; }
-        [JsonPropertyName("peers")] public List<PeerEndpoint> Peers { get; set; } = new();
+        [JsonPropertyName("peers")] public List<PeerEndpoint> Peers { get; set; } = [];
     }
 }

@@ -19,6 +19,8 @@ namespace RetroNetplayLauncher
         private string _activeRoomCode = "";
 
         public int LocalPort { get; private set; }
+        public bool IsHost { get; private set; } = false;
+
 
         // Event to notify our XAML UI when the player list changes
         public event Action<LobbyUpdateMessage>? OnLobbyUpdated;
@@ -44,6 +46,7 @@ namespace RetroNetplayLauncher
         // --- HOST THE SESSION ---
         public string HostSession(int maxPlayers)
         {
+            IsHost = true;
             var request = new HostRequest { MaxPlayers = maxPlayers };
             string payload = JsonSerializer.Serialize(request);
             byte[] data = Encoding.UTF8.GetBytes(payload);
@@ -80,6 +83,7 @@ namespace RetroNetplayLauncher
         // --- JOIN AN EXISTING SESSION ---
         public void JoinSession(string roomCode)
         {
+            IsHost = false;
             _activeRoomCode = roomCode;
             var request = new { command = "JOIN", code = roomCode };
             byte[] data = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request));
@@ -157,7 +161,7 @@ namespace RetroNetplayLauncher
             // Blast packets at every single player in the list to pierce their firewalls
             foreach (var peer in peers)
             {
-                IPEndPoint peerEP = new IPEndPoint(IPAddress.Parse(peer.Ip), peer.Port);
+                IPEndPoint peerEP = new(IPAddress.Parse(peer.Ip), peer.Port);
 
                 for (int i = 0; i < 10; i++)
                 {

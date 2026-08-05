@@ -10,13 +10,15 @@ namespace RetroNetplayCore
         private readonly Socket _socket;
         private readonly bool _isHost;
         private readonly IPEndPoint[] _clientEndPoints = new IPEndPoint[4]; // Slots 1, 2, 3
-        private readonly IPEndPoint _hostEndPoint;
+        private readonly IPEndPoint? _hostEndPoint;
 
         // Host Constructor
         public NetworkLink(int localPort)
         {
             _isHost = true;
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            // Overrides native kernel locks so the Core can instantly claim the port
+            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _socket.Bind(new IPEndPoint(IPAddress.Any, localPort));
             _socket.Blocking = false;
         }
@@ -26,6 +28,8 @@ namespace RetroNetplayCore
         {
             _isHost = false;
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            // Overrides native kernel locks so the Core can instantly claim the port
+            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _socket.Bind(new IPEndPoint(IPAddress.Any, localPort));
             _socket.Blocking = false;
             _hostEndPoint = new IPEndPoint(IPAddress.Parse(hostAddress), hostPort);
@@ -45,7 +49,7 @@ namespace RetroNetplayCore
             ReadOnlySpan<byte> sendSpan = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref packet, 1));
             try
             {
-                _socket.SendTo(sendSpan, SocketFlags.None, _hostEndPoint);
+                _socket.SendTo(sendSpan, SocketFlags.None, _hostEndPoint!);
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock) { }
         }
