@@ -10,7 +10,7 @@ namespace RetroNetplayLauncher
 {
     public class MatchmakerClient
     {
-        private readonly string _serverIP = "127.0.0.1"; // Change to your AWS public IP later
+        private readonly string _serverIP; // Dynamically assigned via constructor
         private readonly int _serverPort = 5000;
         private readonly Socket _socket;
         private readonly IPEndPoint _serverEndPoint;
@@ -26,8 +26,11 @@ namespace RetroNetplayLauncher
         public event Action<LobbyUpdateMessage>? OnLobbyUpdated;
         public event Action? OnGameStarting;
 
-        public MatchmakerClient()
+        // Update your constructor to receive the string from the UI textbox entry
+        public MatchmakerClient(string serverIpAddress)
         {
+            _serverIP = serverIpAddress; // Assign it straight to our tracking field
+
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
             // FIX: Binding to port 0 tells the OS to assign a random, free port instantly

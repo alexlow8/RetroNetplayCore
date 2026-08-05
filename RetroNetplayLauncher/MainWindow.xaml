@@ -52,11 +52,20 @@
         </GroupBox>
 
         <!-- MIDDLE BOX: Joining Controls -->
-        <GroupBox Header="Join Session" Grid.Row="1" Margin="0,0,0,10">
-            <StackPanel Orientation="Horizontal" Margin="10">
-                <TextBlock Text="Room Code: " VerticalAlignment="Center" Margin="0,0,5,0"/>
-                <TextBox x:Name="RoomCodeTxt" Width="100" VerticalContentAlignment="Center" CharacterCasing="Upper" MaxLength="4"/>
-                <Button x:Name="JoinBtn" Content="Join" Width="80" Margin="10,0,0,0" Click="JoinBtn_Click" IsEnabled="False"/>
+        <GroupBox Header="Server Configuration &amp; Joining" Grid.Row="1" Margin="0,0,0,10">
+            <StackPanel Margin="10">
+                <!-- Server IP Entry Row -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="Server IP: " VerticalAlignment="Center" Width="75"/>
+                    <TextBox x:Name="ServerIpTxt" Text="127.0.0.1" Width="140" VerticalContentAlignment="Center" ToolTip="Enter your Synology NAS public or local IP"/>
+                </StackPanel>
+
+                <!-- Room Code Joining Row -->
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Room Code: " VerticalAlignment="Center" Width="75"/>
+                    <TextBox x:Name="RoomCodeTxt" Width="60" VerticalContentAlignment="Center" CharacterCasing="Upper" MaxLength="4"/>
+                    <Button x:Name="JoinBtn" Content="Join Session" Width="80" Margin="10,0,0,0" Click="JoinBtn_Click" IsEnabled="False"/>
+                </StackPanel>
             </StackPanel>
         </GroupBox>
 

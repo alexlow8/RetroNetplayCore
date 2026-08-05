@@ -122,8 +122,11 @@ namespace RetroNetplayLauncher
                     }
                 }
 
-                // Initialize our matchmaker client with dynamic port assignment
-                _matchmaker = new MatchmakerClient();
+                // Snatch the target server IP straight from our new XAML text box entry
+                string targetServerIp = ServerIpTxt.Text.Trim();
+
+                // Initialize our matchmaker client with dynamic ip assignment
+                _matchmaker = new MatchmakerClient(targetServerIp); // <-- PASSED IP HERE
 
                 // Wire up our background network events to update our XAML interface safely
                 _matchmaker.OnLobbyUpdated += Matchmaker_OnLobbyUpdated;
@@ -165,7 +168,7 @@ namespace RetroNetplayLauncher
 
             try
             {
-                _matchmaker = new MatchmakerClient();
+                _matchmaker = new MatchmakerClient(ServerIpTxt.Text.Trim()); // <-- PASSED IP HERE
                 _matchmaker.OnLobbyUpdated += Matchmaker_OnLobbyUpdated;
                 _matchmaker.OnGameStarting += Matchmaker_OnGameStarting;
 
