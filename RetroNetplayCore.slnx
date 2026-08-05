@@ -6,5 +6,6 @@
   </Configurations>
   <Project Path="MockLibretroCore/MockLibretroCore.vcxproj" Id="8872768b-3967-4dd8-b78a-c1b20f3e5d11" />
   <Project Path="RetroNetplayCore/RetroNetplayCore.csproj" />
+  <Project Path="RetroNetplayInstaller/RetroNetplayInstaller.vdproj" Type="Installer" />
   <Project Path="RetroNetplayLauncher/RetroNetplayLauncher.csproj" Id="5b4c5507-345b-4439-b493-214cce6bd366" />
 </Solution>

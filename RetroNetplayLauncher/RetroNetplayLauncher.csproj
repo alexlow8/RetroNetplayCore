@@ -10,5 +10,11 @@
     <!-- Force compiling to the exact folder without appending sub-directories -->
     <BaseOutputPath>C:\Users\Alex\source\repos\RetroNetplayCore\RetroNetplayCore\bin</BaseOutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <OutputPath>..\RetroNetplayCore\bin\$(Configuration)\</OutputPath>  </PropertyGroup>
+    <OutputPath>..\RetroNetplayCore\bin\$(Configuration)\</OutputPath>  
+    <PlatformTarget>x64</PlatformTarget></PropertyGroup>
+
+  <!-- Force a loose copy of our primary executable into the target root directory -->
+  <Target Name="PostBuildInstallerCopy" AfterTargets="PostBuildEvent">
+    <Copy SourceFiles="$(TargetDir)$(TargetName).exe" DestinationFiles="$(ProjectDir)$(TargetName).exe" ContinueOnError="true" />
+  </Target>
 </Project>
