@@ -3,7 +3,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 
-namespace RetroNetplayCore
+namespace RetroNetplayCore.Configuration
 {
     public class EngineConfig
     {

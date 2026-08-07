@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace RetroNetplayCore
+namespace RetroNetplayCore.Input
 {
     [Flags]
     public enum XInputButtonFlags : ushort

@@ -1,4 +1,5 @@
-﻿using System;
+﻿using RetroNetplayCore.Packets;
+using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;

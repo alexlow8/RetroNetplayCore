@@ -1,4 +1,6 @@
-﻿using System;
+﻿using RetroNetplayCore.Input;
+using RetroNetplayCore.Packets;
+using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -75,22 +77,22 @@ namespace RetroNetplayCore.Emulator
             };
 
             // --- 1. HANDLE DIGITAL JOYPAD METRICS ---
-            if (device == LibretroConstants.RETRO_DEVICE_JOYPAD)
+            if (device == LibretroInputConstants.RETRO_DEVICE_JOYPAD)
             {
                 ushort checkMask = id switch
                 {
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_B => (ushort)XInputButtonFlags.A,      // Libretro B maps to Xbox A
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_A => (ushort)XInputButtonFlags.B,      // Libretro A maps to Xbox B
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_Y => (ushort)XInputButtonFlags.X,      // Libretro Y maps to Xbox X
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_X => (ushort)XInputButtonFlags.Y,      // Libretro X maps to Xbox Y
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_B => (ushort)XInputButtonFlags.A,      // Libretro B maps to Xbox A
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_A => (ushort)XInputButtonFlags.B,      // Libretro A maps to Xbox B
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_Y => (ushort)XInputButtonFlags.X,      // Libretro Y maps to Xbox X
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_X => (ushort)XInputButtonFlags.Y,      // Libretro X maps to Xbox Y
 
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_START => (ushort)XInputButtonFlags.Start,
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_SELECT => (ushort)XInputButtonFlags.Back,
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_START => (ushort)XInputButtonFlags.Start,
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_SELECT => (ushort)XInputButtonFlags.Back,
 
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_UP => (ushort)XInputButtonFlags.DPadUp,
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_DOWN => (ushort)XInputButtonFlags.DPadDown,
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_LEFT => (ushort)XInputButtonFlags.DPadLeft,
-                    LibretroConstants.RETRO_DEVICE_ID_JOYPAD_RIGHT => (ushort)XInputButtonFlags.DPadRight,
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_UP => (ushort)XInputButtonFlags.DPadUp,
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_DOWN => (ushort)XInputButtonFlags.DPadDown,
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_LEFT => (ushort)XInputButtonFlags.DPadLeft,
+                    LibretroInputConstants.RETRO_DEVICE_ID_JOYPAD_RIGHT => (ushort)XInputButtonFlags.DPadRight,
 
                     10 => (ushort)XInputButtonFlags.LeftShoulder,  // Libretro L1 (ID 10)
                     11 => (ushort)XInputButtonFlags.RightShoulder, // Libretro R1 (ID 11)

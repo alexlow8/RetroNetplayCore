@@ -1,6 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 
-namespace RetroNetplayCore
+namespace RetroNetplayCore.Packets
 {
     // Sent from individual clients to the Host.
     // Total Size: EXACTLY 16 BYTES.

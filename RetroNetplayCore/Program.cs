@@ -3,6 +3,8 @@ using System.Threading;
 using System.Runtime.InteropServices;
 using RetroNetplayCore.Emulator;
 using RetroNetplayCore.Synchronization;
+using RetroNetplayCore.Configuration;
+using RetroNetplayCore.Packets;
 
 namespace RetroNetplayCore
 {

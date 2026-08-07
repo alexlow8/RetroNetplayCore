@@ -1,4 +1,6 @@
-﻿namespace RetroNetplayCore.Synchronization
+﻿using RetroNetplayCore.Packets;
+
+namespace RetroNetplayCore.Synchronization
 {
     public interface INetplaySyncEngine
     {

@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using RetroNetplayCore.Packets;
+using System.Runtime.CompilerServices;
 
 namespace RetroNetplayCore.Synchronization
 {

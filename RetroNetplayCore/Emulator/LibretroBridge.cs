@@ -9,6 +9,7 @@ namespace RetroNetplayCore.Emulator
         private IntPtr _coreHandle;
 
         // Core Unmanaged Function Pointers
+        private delegate* unmanaged[Cdecl]<IntPtr, void> _retroSetEnvironment;
         private delegate* unmanaged[Cdecl]<IntPtr, void> _retroSetVideoRefresh;
         private delegate* unmanaged[Cdecl]<IntPtr, void> _retroSetInputPoll;
         private delegate* unmanaged[Cdecl]<IntPtr, void> _retroSetInputState;
@@ -23,6 +24,7 @@ namespace RetroNetplayCore.Emulator
             _coreHandle = NativeLibrary.Load(dllPath);
 
             // Extract entry points directly to unmanaged pointers
+            _retroSetEnvironment = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_set_environment");
             _retroSetVideoRefresh = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_set_video_refresh");
             _retroSetInputPoll = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_set_input_poll");
             _retroSetInputState = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_set_input_state");
@@ -33,8 +35,11 @@ namespace RetroNetplayCore.Emulator
             _retroRun = (delegate* unmanaged[Cdecl]<void>)NativeLibrary.GetExport(_coreHandle, "retro_run");
         }
 
-        public void InitializeCore(IntPtr videoCallback, IntPtr pollCallback, IntPtr stateCallback)
+        public void InitializeCore(IntPtr environmentCallback, IntPtr videoCallback, IntPtr pollCallback, IntPtr stateCallback)
         {
+            // The core demands environment registration first!
+            _retroSetEnvironment(environmentCallback);
+
             _retroSetVideoRefresh(videoCallback);
             _retroSetInputPoll(pollCallback);
             _retroSetInputState(stateCallback);
