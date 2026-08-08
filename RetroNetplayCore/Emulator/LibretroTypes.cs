@@ -57,6 +57,6 @@ namespace RetroNetplayCore.Emulator
     public unsafe struct RetroLogCallback
     {
         // A direct pointer to an unmanaged C-style printf logging function
-        public delegate* unmanaged[Cdecl]<uint, byte*, void> Log;
+        public delegate* unmanaged[Cdecl]<uint, byte*, void*, void> Log;
     }
 }

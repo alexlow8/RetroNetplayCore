@@ -18,6 +18,9 @@ namespace RetroNetplayCore.Emulator
         private delegate* unmanaged[Cdecl]<IntPtr, void> _retroGetSystemInfo;
         private delegate* unmanaged[Cdecl]<IntPtr, bool> _retroLoadGame;
         private delegate* unmanaged[Cdecl]<void> _retroRun;
+        private delegate* unmanaged[Cdecl]<IntPtr, void> _retroSetAudioSample;
+        private delegate* unmanaged[Cdecl]<IntPtr, void> _retroSetAudioSampleBatch;
+
 
         public void LoadCoreLibrary(string dllPath)
         {
@@ -33,14 +36,19 @@ namespace RetroNetplayCore.Emulator
             _retroGetSystemInfo = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_get_system_info");
             _retroLoadGame = (delegate* unmanaged[Cdecl]<IntPtr, bool>)NativeLibrary.GetExport(_coreHandle, "retro_load_game");
             _retroRun = (delegate* unmanaged[Cdecl]<void>)NativeLibrary.GetExport(_coreHandle, "retro_run");
+            _retroSetAudioSample = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_set_audio_sample");
+            _retroSetAudioSampleBatch = (delegate* unmanaged[Cdecl]<IntPtr, void>)NativeLibrary.GetExport(_coreHandle, "retro_set_audio_sample_batch");
         }
 
-        public void InitializeCore(IntPtr environmentCallback, IntPtr videoCallback, IntPtr pollCallback, IntPtr stateCallback)
+        public void InitializeCore(IntPtr environmentCallback, IntPtr videoCallback, IntPtr audioCallback, IntPtr audioBatchCallback, IntPtr pollCallback, IntPtr stateCallback)
         {
-            // The core demands environment registration first!
             _retroSetEnvironment(environmentCallback);
-
             _retroSetVideoRefresh(videoCallback);
+
+            // Wire up our two new audio lines
+            _retroSetAudioSample(audioCallback);
+            _retroSetAudioSampleBatch(audioBatchCallback);
+
             _retroSetInputPoll(pollCallback);
             _retroSetInputState(stateCallback);
 

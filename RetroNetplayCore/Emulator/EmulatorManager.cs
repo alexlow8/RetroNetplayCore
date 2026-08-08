@@ -24,12 +24,19 @@ namespace RetroNetplayCore.Emulator
         {
             _bridge.LoadCoreLibrary(corePath);
 
-            // Fetch the static video callback pointer straight from our VideoPipeline class
+            // 1. Fetch our unmanaged static function pointers straight from the stack address
+            IntPtr ePtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, void*, bool>)&OnEnvironmentCall;
             IntPtr vPtr = (IntPtr)(delegate* unmanaged[Cdecl]<nint, uint, uint, nuint, void>)&VideoPipeline.ProcessFrame;
+
+            // NEW: Fetch addresses for our single and batch audio handlers
+            IntPtr aPtr = (IntPtr)(delegate* unmanaged[Cdecl]<short, short, void>)&AudioPipeline.ProcessSample;
+            IntPtr abPtr = (IntPtr)(delegate* unmanaged[Cdecl]<short*, nuint, nuint>)&AudioPipeline.ProcessSampleBatch;
+
             IntPtr pPtr = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&OnInputPoll;
             IntPtr sPtr = (IntPtr)(delegate* unmanaged[Cdecl]<uint, uint, uint, uint, short>)&OnInputState;
 
-            _bridge.InitializeCore(vPtr, pPtr, sPtr);
+            // 2. Hand all 6 entry points down to our upgraded LibretroBridge
+            _bridge.InitializeCore(ePtr, vPtr, aPtr, abPtr, pPtr, sPtr);
 
             // Delegate ROM structural design out to the RomLoader class
             RetroGameInfo gameInfo = _romLoader.PrepareGameInfo(romPath);
@@ -52,6 +59,58 @@ namespace RetroNetplayCore.Emulator
         {
             _bridge.Unload();
             _romLoader.CleanUp();
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static bool OnEnvironmentCall(uint cmd, void* data)
+        {
+            switch (cmd)
+            {
+                case LibretroEnvConstants.RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
+                    if (data == null) return false;
+                    // Fill the core's struct layout with our unmanaged log function pointer
+                    RetroLogCallback* cb = (RetroLogCallback*)data;
+                    cb->Log = &OnLogPrintf;
+                    return true;
+
+                case LibretroEnvConstants.RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
+                    if (data == null) return false;
+                    uint requestedFormat = *(uint*)data;
+                    Console.WriteLine($"📺 Core requested Video Pixel Format ID: {requestedFormat}");
+                    // Acknowledge and accept the core's requested format layout
+                    return true;
+
+                case LibretroEnvConstants.RETRO_ENVIRONMENT_GET_CAN_DUPLICATE_FRAMES:
+                    if (data == null) return false;
+                    // Inform the core that our frontend supports frame duplication optimization
+                    *(bool*)data = true;
+                    return true;
+
+                default:
+                    // Safely tell the core we don't support or handle any other commands yet
+                    return false;
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void OnLogPrintf(uint level, byte* format, void* args)
+        {
+            if (format == null) return;
+
+            // Convert the raw native C-string bytes safely into a managed C# string
+            string message = Marshal.PtrToStringAnsi((IntPtr)format) ?? string.Empty;
+
+            // Optional: Prefix the console text based on the core's reported warning severity level
+            string prefix = level switch
+            {
+                0 => "[CORE DEBUG]",
+                1 => "[CORE INFO]",
+                2 => "[CORE WARN]",
+                3 => "[CORE ERROR]",
+                _ => "[CORE]"
+            };
+
+            Console.WriteLine($"{prefix} {message.TrimEnd()}");
         }
 
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
