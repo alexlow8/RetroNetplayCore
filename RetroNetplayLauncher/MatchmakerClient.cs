@@ -33,6 +33,9 @@ namespace RetroNetplayLauncher
 
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
+            // Set ReuseAddress on the launcher socket as well to facilitate clean handoffs
+            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+
             // FIX: Binding to port 0 tells the OS to assign a random, free port instantly
             _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
             _socket.Blocking = false;
@@ -173,7 +176,15 @@ namespace RetroNetplayLauncher
                 }
             }
 
-            _socket.Close(); // Relinquish the port so the emulator core can bind instantly
+            // CLEAN HANDOFF FIX: Tell the OS kernel we are shutting down our traffic 
+            // streams on this socket before completely freeing it.
+            try
+            {
+                _socket.Shutdown(SocketShutdown.Both);
+            }
+            catch (SocketException) { /* Swallow if socket was already unaligned */ }
+
+            _socket.Close(); // Relinquish the port handle so the core can instantly reclaim it
         }
 
         // --- SEND THE START SIGNAL (Host Only) ---

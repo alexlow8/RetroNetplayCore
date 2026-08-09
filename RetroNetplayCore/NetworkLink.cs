@@ -18,6 +18,7 @@ namespace RetroNetplayCore
         {
             _isHost = true;
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
             // Overrides native kernel locks so the Core can instantly claim the port
             _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _socket.Bind(new IPEndPoint(IPAddress.Any, localPort));
@@ -29,6 +30,7 @@ namespace RetroNetplayCore
         {
             _isHost = false;
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
             // Overrides native kernel locks so the Core can instantly claim the port
             _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _socket.Bind(new IPEndPoint(IPAddress.Any, localPort));
@@ -52,7 +54,18 @@ namespace RetroNetplayCore
             {
                 _socket.SendTo(sendSpan, SocketFlags.None, _hostEndPoint!);
             }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock) { }
+            catch (SocketException ex) when (
+                ex.SocketErrorCode == SocketError.WouldBlock ||
+                ex.SocketErrorCode == SocketError.ConnectionReset ||
+                ex.SocketErrorCode == SocketError.ConnectionRefused)
+            {
+                // INTERNET ACCESSIBILITY FIX: Silently swallow ICMP port returns or disconnects 
+                // to maintain continuous frame replication down the pipeline.
+            }
+            catch (Exception)
+            {
+                // Prevent unmanaged thread crashing
+            }
         }
 
         /// <summary>
@@ -71,7 +84,18 @@ namespace RetroNetplayCore
                     }
                 }
             }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock) { }
+            catch (SocketException ex) when (
+                ex.SocketErrorCode == SocketError.WouldBlock ||
+                ex.SocketErrorCode == SocketError.ConnectionReset ||
+                ex.SocketErrorCode == SocketError.ConnectionRefused)
+            {
+                // INTERNET ACCESSIBILITY FIX: Ignore unreachable client returns on broadcast routes 
+                // so an internet drop on one slot doesn't kill the simulation for everyone else.
+            }
+            catch (Exception)
+            {
+                // Protect loop boundary consistency
+            }
         }
 
         /// <summary>
