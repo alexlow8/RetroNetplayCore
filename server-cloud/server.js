@@ -47,12 +47,15 @@ server.on('message', (msg, rinfo) => {
         rooms[roomCode] = {
             lastPing: Date.now(),
             maxPlayers: allowedPlayers, // Store the specific core's player limit
+            coreName: data.coreName || "MockLibretroCore.dll", // 🔥 EXTRACT AND CACHE SELECTIONS
+            romPath: data.romPath || "",                       // 🔥 EXTRACT AND CACHE SELECTIONS
             players: [
                 { ip: senderIP, port: senderPort, isHost: true }
             ]
         };
 
         console.log(`[Host] Room ${roomCode} created (${allowedPlayers} Players Max) by Host at ${senderIP}:${senderPort}`);
+        console.log(`       Target Core: ${rooms[roomCode].coreName} | Target ROM: ${rooms[roomCode].romPath || 'None'}`);
         
         const response = JSON.stringify({ status: 'ROOM_CREATED', code: roomCode });
         server.send(response, senderPort, senderIP);
@@ -92,9 +95,12 @@ server.on('message', (msg, rinfo) => {
         console.log(`[Join] Player ${room.players.length}/${room.maxPlayers} joined Room ${roomCode}`);
         room.lastPing = Date.now();
 
+        // 🔥 ENRICH LOBBY UPDATE PAYLOAD SO NEWCOMERS DISCOVER CHOSEN CORE/ROM DETAILS INSTANTLY
         const updatePayload = JSON.stringify({
             status: 'LOBBY_UPDATE',
             playerIndex: room.players.length - 1, 
+            coreName: room.coreName,
+            romPath: room.romPath,
             peers: room.players
         });
 
@@ -111,7 +117,13 @@ server.on('message', (msg, rinfo) => {
         if (room && room.players[0].ip === senderIP && room.players[0].port === senderPort) {
             console.log(`[Start] Host started game for Room ${roomCode}. Closing lobby.`);
             
-            const startPayload = JSON.stringify({ status: 'GAME_STARTING' });
+            // 🔥 ENRICH START PAYLOAD SO CLIENTS GET THE FINAL VALIDATED CORE/ROM VALUES ON DISPATCH
+            const startPayload = JSON.stringify({ 
+                status: 'GAME_STARTING',
+                coreName: room.coreName,
+                romPath: room.romPath
+            });
+            
             for (const player of room.players) {
                 server.send(startPayload, player.port, player.ip);
             }

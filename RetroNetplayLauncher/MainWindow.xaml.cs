@@ -9,6 +9,7 @@ namespace RetroNetplayLauncher
     public partial class MainWindow : Window
     {
         private MatchmakerClient? _matchmaker;
+        private AppConfig _appConfig = null!;
 
         public MainWindow() => InitializeComponent();
 
@@ -16,16 +17,36 @@ namespace RetroNetplayLauncher
         {
             try
             {
+                _appConfig = AppConfig.Load();
+                ServerIpTxt.Text = _appConfig.LastUsedServerIP;
+
                 EmulatorComboBox.Items.Clear();
                 foreach (string core in CoreScanner.ScanForCores()) EmulatorComboBox.Items.Add(core);
-                StatusTxt.Text = "Status: Select an emulator core to begin.";
+
+                StatusTxt.Text = "Status: Welcome. Choose your session role.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error initializing cores: {ex.Message}", "Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Initialization error: {ex.Message}", "Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
+        // --- BUTTONS TO TOGGLE INITIAL UI ROLE PANELS ---
+        private void ChooseHostBtn_Click(object sender, RoutedEventArgs e)
+        {
+            HostConfigPanel.Visibility = Visibility.Visible;
+            JoinConfigPanel.Visibility = Visibility.Collapsed;
+            StatusTxt.Text = "Status: Configure your local game and open the lobby.";
+        }
+
+        private void ChooseJoinBtn_Click(object sender, RoutedEventArgs e)
+        {
+            HostConfigPanel.Visibility = Visibility.Collapsed;
+            JoinConfigPanel.Visibility = Visibility.Visible;
+            StatusTxt.Text = "Status: Enter your host friend's 4-digit code.";
+        }
+
+        // --- HOST CORE SELECTION FLOW ---
         private void EmulatorComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (EmulatorComboBox.SelectedItem == null) return;
@@ -34,9 +55,8 @@ namespace RetroNetplayLauncher
             bool isMock = selectedCore.Contains("MockLibretroCore", StringComparison.OrdinalIgnoreCase);
             RomPathTxt.Text = isMock ? "[NOT REQUIRED FOR MOCK CORE]" : "";
             BrowseRomBtn.IsEnabled = !isMock;
-            HostBtn.IsEnabled = isMock;
-            JoinBtn.IsEnabled = isMock;
-            StatusTxt.Text = isMock ? "Status: Mock Core ready. Choose Host or Join." : "Status: Please select a game ROM.";
+            HostFinalBtn.IsEnabled = isMock;
+            StatusTxt.Text = isMock ? "Status: Mock setup ready. Open your lobby." : "Status: Select a game ROM file to proceed.";
         }
 
         private void BrowseRomBtn_Click(object sender, RoutedEventArgs e)
@@ -45,20 +65,19 @@ namespace RetroNetplayLauncher
             if (openFileDialog.ShowDialog() == true)
             {
                 RomPathTxt.Text = openFileDialog.FileName;
-                HostBtn.IsEnabled = JoinBtn.IsEnabled = true;
-                StatusTxt.Text = "Status: Ready to connect.";
+                HostFinalBtn.IsEnabled = true;
+                StatusTxt.Text = "Status: Selection complete. Open your lobby.";
             }
         }
 
-        private void HostBtn_Click(object sender, RoutedEventArgs e)
+        // --- NETWORK ACTIONS (REVEAL LOBBY PANEL ON CONNECT) ---
+        private void HostFinalBtn_Click(object sender, RoutedEventArgs e)
         {
-            StatusTxt.Text = "Status: Connecting to matchmaking server...";
-            HostBtn.IsEnabled = JoinBtn.IsEnabled = false;
+            StatusTxt.Text = "Status: Reaching matching server...";
+            HostFinalBtn.IsEnabled = ServerIpTxt.IsEnabled = RoleSelectionGrid.IsEnabled = false;
 
             try
             {
-                // CA1806 & LOGIC BUG FIX: Explicitly evaluate the boolean result of TryParse.
-                // If it fails, default to 2 players safely.
                 int maxPlayers = 2;
                 if (MaxPlayersComboBox.SelectedItem is ComboBoxItem item)
                 {
@@ -70,44 +89,68 @@ namespace RetroNetplayLauncher
                 }
 
                 string targetServerIp = ServerIpTxt.Text.Trim();
+                _appConfig.LastUsedServerIP = targetServerIp;
+                _appConfig.Save();
+
+                // 🔥 EXTRACT THE LOCAL SELECTIONS TO TRANSMIT
+                string selectedCore = EmulatorComboBox.SelectedItem?.ToString() ?? "MockLibretroCore.dll";
+                string romPath = RomPathTxt.Text;
 
                 _matchmaker = new MatchmakerClient(targetServerIp);
                 _matchmaker.OnLobbyUpdated += Matchmaker_OnLobbyUpdated;
                 _matchmaker.OnGameStarting += Matchmaker_OnGameStarting;
 
-                DisplayRoomCodeTxt.Text = $"CODE: {_matchmaker.HostSession(maxPlayers)}";
-                StatusTxt.Text = $"Status: Lobby open on port {_matchmaker.LocalPort}. Waiting for players...";
-                StartGameBtn.IsEnabled = true;
+                // 🔥 HAND THE ARGUMENTS OVER TO THE CLIENT HANDSHAKE METHOD
+                DisplayRoomCodeTxt.Text = $"CODE: {_matchmaker.HostSession(maxPlayers, selectedCore, romPath)}";
+
+                HostConfigPanel.Visibility = Visibility.Collapsed;
+                LobbyPanel.Visibility = Visibility.Visible;
+                StartGameBtn.Visibility = Visibility.Visible;
+
+                StatusTxt.Text = $"Status: Lobby running on port {_matchmaker.LocalPort}. Awaiting peers...";
             }
             catch (Exception ex)
             {
-                HostBtn.IsEnabled = JoinBtn.IsEnabled = true;
-                MessageBox.Show($"Could not host session: {ex.Message}", "Network Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                HostFinalBtn.IsEnabled = ServerIpTxt.IsEnabled = RoleSelectionGrid.IsEnabled = true;
+                MessageBox.Show($"Could not create room: {ex.Message}", "Network Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
-        private void JoinBtn_Click(object sender, RoutedEventArgs e)
+        private void JoinFinalBtn_Click(object sender, RoutedEventArgs e)
         {
             string codeInput = RoomCodeTxt.Text.Trim().ToUpper();
-            if (string.IsNullOrEmpty(codeInput) || codeInput.Length != 4) return;
+            if (string.IsNullOrEmpty(codeInput) || codeInput.Length != 4)
+            {
+                MessageBox.Show("Please enter a valid 4-digit room code.", "Validation Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
 
-            StatusTxt.Text = $"Status: Joining room {codeInput}...";
-            HostBtn.IsEnabled = JoinBtn.IsEnabled = false;
+            StatusTxt.Text = $"Status: Accessing room {codeInput}...";
+            JoinFinalBtn.IsEnabled = ServerIpTxt.IsEnabled = RoleSelectionGrid.IsEnabled = false;
 
             try
             {
-                _matchmaker = new MatchmakerClient(ServerIpTxt.Text.Trim());
+                string targetServerIp = ServerIpTxt.Text.Trim();
+                _appConfig.LastUsedServerIP = targetServerIp;
+                _appConfig.Save();
+
+                _matchmaker = new MatchmakerClient(targetServerIp);
                 _matchmaker.OnLobbyUpdated += Matchmaker_OnLobbyUpdated;
                 _matchmaker.OnGameStarting += Matchmaker_OnGameStarting;
                 _matchmaker.JoinSession(codeInput);
 
                 DisplayRoomCodeTxt.Text = $"CODE: {codeInput}";
-                StatusTxt.Text = $"Status: Connected on port {_matchmaker.LocalPort}. Waiting for Host...";
+
+                // Switch client screen over to the live roster view
+                JoinConfigPanel.Visibility = Visibility.Collapsed;
+                LobbyPanel.Visibility = Visibility.Visible;
+
+                StatusTxt.Text = $"Status: Joined room. Waiting for host to initiate launch...";
             }
             catch (Exception ex)
             {
-                HostBtn.IsEnabled = JoinBtn.IsEnabled = true;
-                MessageBox.Show($"Could not join session: {ex.Message}", "Network Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                JoinFinalBtn.IsEnabled = ServerIpTxt.IsEnabled = RoleSelectionGrid.IsEnabled = true;
+                MessageBox.Show($"Could not connect to room: {ex.Message}", "Network Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -138,8 +181,17 @@ namespace RetroNetplayLauncher
 
                 _matchmaker.ExecuteHolePunch(peerRoster);
 
-                string selectedCore = EmulatorComboBox.SelectedItem?.ToString() ?? "MockLibretroCore.dll";
-                ConfigWriter.WriteLaunchConfig(_matchmaker, peerRoster, selectedCore, RomPathTxt.Text);
+                // Safe defaults: Clients use placeholders because their JSON is overwritten by the host configuration anyway
+                string selectedCore = "MockLibretroCore.dll";
+                string romPath = "";
+
+                if (_matchmaker.IsHost)
+                {
+                    selectedCore = EmulatorComboBox.SelectedItem?.ToString() ?? "MockLibretroCore.dll";
+                    romPath = RomPathTxt.Text;
+                }
+
+                ConfigWriter.WriteLaunchConfig(_matchmaker, peerRoster, selectedCore, romPath);
                 SessionManager.BootUnmanagedCore();
 
                 StatusTxt.Text = "Status: Emulation active. Gameplay running.";

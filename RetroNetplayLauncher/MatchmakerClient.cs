@@ -20,7 +20,8 @@ namespace RetroNetplayLauncher
 
         public int LocalPort { get; private set; }
         public bool IsHost { get; private set; } = false;
-
+        public string TargetCoreName { get; private set; } = "MockLibretroCore.dll";
+        public string TargetRomPath { get; private set; } = "";
 
         // Event to notify our XAML UI when the player list changes
         public event Action<LobbyUpdateMessage>? OnLobbyUpdated;
@@ -32,28 +33,48 @@ namespace RetroNetplayLauncher
             _serverIP = serverIpAddress; // Assign it straight to our tracking field
 
             _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
-            // Set ReuseAddress on the launcher socket as well to facilitate clean handoffs
             _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-
-            // FIX: Binding to port 0 tells the OS to assign a random, free port instantly
             _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
             _socket.Blocking = false;
 
-            _serverEndPoint = new IPEndPoint(IPAddress.Parse(_serverIP), _serverPort);
-
-            // Capture the exact port number the OS allocated for this socket
-            if (_socket.LocalEndPoint is IPEndPoint boundEndPoint)
+            // AUTOMATED DNS RESOLUTION FIX: Handle domains like 'mycoolemulator.synology.me' or raw numbers flawlessly
+            IPAddress targetAddress;
+            if (IPAddress.TryParse(_serverIP, out var parsedIP))
             {
-                LocalPort = boundEndPoint.Port;
+                targetAddress = parsedIP;
             }
+            else
+            {
+                try
+                {
+                    // Look up the current active IP of your Synology NAS via network DNS routing
+                    IPAddress[] addresses = Dns.GetHostAddresses(_serverIP);
+                    targetAddress = addresses[0]; // Grab the primary resolved routing destination
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Could not resolve server connection address: {ex.Message}", ex);
+                }
+            }
+
+            _serverEndPoint = new IPEndPoint(targetAddress, _serverPort);
         }
 
         // --- HOST THE SESSION ---
-        public string HostSession(int maxPlayers)
+        // --- HOST THE SESSION ---
+        public string HostSession(int maxPlayers, string selectedCore, string romPath)
         {
             IsHost = true;
-            var request = new HostRequest { MaxPlayers = maxPlayers };
+
+            // 🔥 ENRICH THE JSON HOST PAYLOAD BEFORE TRANSMITTING
+            var request = new
+            {
+                command = "HOST",
+                maxPlayers,
+                selectedCore,
+                romPath = System.IO.Path.GetFileName(romPath) // Only pass the clean filename over the wire!
+            };
+
             string payload = JsonSerializer.Serialize(request);
             byte[] data = Encoding.UTF8.GetBytes(payload);
 
@@ -63,7 +84,6 @@ namespace RetroNetplayLauncher
             byte[] buffer = new byte[1024];
             EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
 
-            // Spin waiting for the response packet safely
             int received = 0;
             while (received == 0)
             {
@@ -78,7 +98,6 @@ namespace RetroNetplayLauncher
             using var doc = JsonDocument.Parse(json);
             _activeRoomCode = doc.RootElement.GetProperty("code").GetString() ?? "";
 
-            // Start background loops for heartbeats and listening for incoming players
             _lobbyCts = new CancellationTokenSource();
             Task.Run(() => StartHeartbeatLoop(_lobbyCts.Token));
             Task.Run(() => StartListeningLoop(_lobbyCts.Token));
@@ -135,19 +154,28 @@ namespace RetroNetplayLauncher
                         using var doc = JsonDocument.Parse(json);
                         string status = doc.RootElement.GetProperty("status").GetString() ?? "";
 
-                        if (status == "LOBBY_UPDATE")
+                        if (status == "LOBBY_UPDATE" || status == "GAME_STARTING")
                         {
-                            var update = JsonSerializer.Deserialize<LobbyUpdateMessage>(json);
-                            if (update != null)
+                            // 🔥 CAPTURE THE HOST'S SELECTIONS FROM THE INCOMING PACKET
+                            if (doc.RootElement.TryGetProperty("coreName", out JsonElement coreProp))
                             {
-                                // Fire the event to alert the XAML UI code-behind
-                                OnLobbyUpdated?.Invoke(update);
+                                TargetCoreName = coreProp.GetString() ?? TargetCoreName;
                             }
-                        }
-                        else if (status == "GAME_STARTING")
-                        {
-                            OnGameStarting?.Invoke();
-                            break;
+                            if (doc.RootElement.TryGetProperty("romPath", out JsonElement romProp))
+                            {
+                                TargetRomPath = romProp.GetString() ?? TargetRomPath;
+                            }
+
+                            if (status == "LOBBY_UPDATE")
+                            {
+                                var update = JsonSerializer.Deserialize<LobbyUpdateMessage>(json);
+                                if (update != null) OnLobbyUpdated?.Invoke(update);
+                            }
+                            else if (status == "GAME_STARTING")
+                            {
+                                OnGameStarting?.Invoke();
+                                break;
+                            }
                         }
                     }
                 }
