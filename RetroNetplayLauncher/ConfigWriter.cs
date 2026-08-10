@@ -2,6 +2,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Collections.Generic;
+using RetroNetplayLauncher.MatchmakerClient;
 
 namespace RetroNetplayLauncher
 {
@@ -10,7 +11,7 @@ namespace RetroNetplayLauncher
         // PERFORMANCE CACHE FIX: Reuse single immutable settings instance across the runtime lifecycle
         private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
-        public static void WriteLaunchConfig(MatchmakerClient matchmaker, List<PeerEndpoint> peerRoster, string selectedCore, string romPath)
+        public static void WriteLaunchConfig(MatchmakerClientBase matchmaker, List<PeerEndpoint> peerRoster, string selectedCore, string romPath)
         {
             string relativeCorePath = Path.Combine("Emulators", selectedCore);
             object launchConfig;

@@ -1,7 +1,7 @@
 const dgram = require('dgram');
 const server = dgram.createSocket('udp4');
 
-const PORT = 5000; 
+const PORT = 5005; 
 const rooms = {};  
 
 const LOBBY_TIMEOUT_MS = 15000; 

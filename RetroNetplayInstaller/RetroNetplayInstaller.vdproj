@@ -261,15 +261,15 @@
         {
         "Name" = "8:Microsoft Visual Studio"
         "ProductName" = "8:RetroNetplay Suite"
-        "ProductCode" = "8:{9BC6CDFA-7881-469D-98AA-C48F78CA80CE}"
-        "PackageCode" = "8:{BE970FD1-5114-4ECD-9F7A-139B3541682C}"
+        "ProductCode" = "8:{6D1AF889-AEBE-4FDD-BAC0-EFBAE43E128E}"
+        "PackageCode" = "8:{398C703A-E115-46BE-ADFF-2FA805AD97FC}"
         "UpgradeCode" = "8:{3F31334A-1BE9-40A4-88CA-7E3F77F7B486}"
         "AspNetVersion" = "8:2.0.50727.0"
         "RestartWWWService" = "11:FALSE"
         "RemovePreviousVersions" = "11:TRUE"
         "DetectNewerInstalledVersion" = "11:TRUE"
         "InstallAllUsers" = "11:FALSE"
-        "ProductVersion" = "8:0.0.4"
+        "ProductVersion" = "8:0.0.1"
         "Manufacturer" = "8:RetroNetplay"
         "ARPHELPTELEPHONE" = "8:"
         "ARPHELPLINK" = "8:"
@@ -1095,7 +1095,7 @@
             }
             "{5259A561-127C-4D43-A0A1-72F10C7B3BF8}:_819FFB2E1E744A0084F260A0186DAD5B"
             {
-            "SourcePath" = "8:..\\RetroNetplayLauncher\\obj\\Release\\apphost.exe"
+            "SourcePath" = "8:..\\RetroNetplayLauncher\\obj\\Debug\\apphost.exe"
             "TargetName" = "8:"
             "Tag" = "8:"
             "Folder" = "8:_970970A65D5746888728592A42E2B47C"

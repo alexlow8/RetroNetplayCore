@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  matchmaker:
+    image: node:20-alpine
+    working_dir: /usr/src/app
+    volumes:
+      - ./server-cloud:/usr/src/app
+    network_mode: "host" # 🔥 Bypasses the 172.18.0.1 Docker bridge to capture real public client IPs
+    command: node server.js
+    restart: always
