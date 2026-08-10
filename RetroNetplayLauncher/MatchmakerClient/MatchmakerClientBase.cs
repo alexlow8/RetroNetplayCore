@@ -9,17 +9,19 @@ using System.Collections.Generic;
 
 namespace RetroNetplayLauncher.MatchmakerClient
 {
-    public abstract class MatchmakerClientBase
+    public abstract class MatchmakerClientBase : IDisposable
     {
         protected readonly string ServerIP;
-        protected readonly int ServerPort = 5005; // Using our updated host port!
+        protected readonly int ServerPort = 5005;
         protected readonly Socket Socket;
         protected readonly IPEndPoint ServerEndPoint;
 
         protected CancellationTokenSource? LobbyCts;
         protected string ActiveRoomCode = "";
+        private bool _isDisposed;
 
         public int LocalPort { get; protected set; }
+        public string LocalIpAddress { get; private set; } = "127.0.0.1";
         public abstract bool IsHost { get; }
         public string TargetCoreName { get; protected set; } = "MockLibretroCore.dll";
         public string TargetRomPath { get; protected set; } = "";
@@ -34,19 +36,18 @@ namespace RetroNetplayLauncher.MatchmakerClient
             Socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             Socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             Socket.Bind(new IPEndPoint(IPAddress.Any, 0));
-            Socket.Blocking = false;
+
+            // Set blocking to true so it works flawlessly with modern async Task operations
+            Socket.Blocking = true;
 
             if (Socket.LocalEndPoint is IPEndPoint localEP)
             {
                 LocalPort = localEP.Port;
             }
 
-            IPAddress targetAddress;
-            if (IPAddress.TryParse(ServerIP, out var parsedIP))
-            {
-                targetAddress = parsedIP;
-            }
-            else
+            DiscoverLocalIp();
+
+            if (!IPAddress.TryParse(ServerIP, out var targetAddress))
             {
                 try
                 {
@@ -62,6 +63,44 @@ namespace RetroNetplayLauncher.MatchmakerClient
             ServerEndPoint = new IPEndPoint(targetAddress, ServerPort);
         }
 
+        /// <summary>
+        /// Finds this computer's internal LAN IP address dynamically.
+        /// </summary>
+        private void DiscoverLocalIp()
+        {
+            try
+            {
+                using Socket tempSocket = new(AddressFamily.InterNetwork, SocketType.Dgram, 0);
+                tempSocket.Connect("8.8.8.8", 65530);
+                if (tempSocket.LocalEndPoint is IPEndPoint localEP)
+                {
+                    LocalIpAddress = localEP.Address.ToString();
+                }
+            }
+            catch
+            {
+                LocalIpAddress = "127.0.0.1";
+            }
+        }
+
+        /// <summary>
+        /// Safely detaches and extracts the socket for the unmanaged application takeover.
+        /// It completely halts background threads first to ensure no thread exceptions occur.
+        /// </summary>
+        public Socket ArrearsAndExtractSocket()
+        {
+            if (LobbyCts != null && !LobbyCts.IsCancellationRequested)
+            {
+                LobbyCts.Cancel();
+            }
+
+            // Severe event bindings to prevent UI manipulation from asynchronous backgrounds
+            OnLobbyUpdated = null;
+            OnGameStarting = null;
+
+            return Socket;
+        }
+
         protected void StartListening()
         {
             LobbyCts = new CancellationTokenSource();
@@ -71,64 +110,93 @@ namespace RetroNetplayLauncher.MatchmakerClient
         private async Task StartListeningLoop(CancellationToken token)
         {
             byte[] buffer = new byte[2048];
-            EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
 
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    if (Socket.Available > 0)
+                    // Asynchronously listen on the socket without locking up thread pools
+                    var result = await Socket.ReceiveFromAsync(new ArraySegment<byte>(buffer), SocketFlags.None, new IPEndPoint(IPAddress.Any, 0));
+
+                    if (result.ReceivedBytes > 0)
                     {
-                        int bytesRead = Socket.ReceiveFrom(buffer, ref remoteEP);
-                        string json = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-
+                        string json = Encoding.UTF8.GetString(buffer, 0, result.ReceivedBytes);
                         using var doc = JsonDocument.Parse(json);
-                        string status = doc.RootElement.GetProperty("status").GetString() ?? "";
 
-                        if (status == "LOBBY_UPDATE" || status == "GAME_STARTING")
+                        if (doc.RootElement.TryGetProperty("status", out JsonElement statusProp))
                         {
-                            if (doc.RootElement.TryGetProperty("coreName", out JsonElement coreProp))
-                                TargetCoreName = coreProp.GetString() ?? TargetCoreName;
+                            string status = statusProp.GetString() ?? "";
 
-                            if (doc.RootElement.TryGetProperty("romPath", out JsonElement romProp))
-                                TargetRomPath = romProp.GetString() ?? TargetRomPath;
+                            if (status == "LOBBY_UPDATE" || status == "GAME_STARTING")
+                            {
+                                if (doc.RootElement.TryGetProperty("coreName", out JsonElement coreProp))
+                                    TargetCoreName = coreProp.GetString() ?? TargetCoreName;
 
-                            if (status == "LOBBY_UPDATE")
-                            {
-                                var update = JsonSerializer.Deserialize<LobbyUpdateMessage>(json);
-                                if (update != null) OnLobbyUpdated?.Invoke(update);
-                            }
-                            else if (status == "GAME_STARTING")
-                            {
-                                OnGameStarting?.Invoke();
-                                break;
+                                if (doc.RootElement.TryGetProperty("romPath", out JsonElement romProp))
+                                    TargetRomPath = romProp.GetString() ?? TargetRomPath;
+
+                                if (status == "LOBBY_UPDATE")
+                                {
+                                    var update = JsonSerializer.Deserialize<LobbyUpdateMessage>(json);
+                                    if (update != null) OnLobbyUpdated?.Invoke(update);
+                                }
+                                else if (status == "GAME_STARTING")
+                                {
+                                    OnGameStarting?.Invoke();
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-                catch (SocketException) { }
-
-                await Task.Delay(50, token);
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted || ex.SocketErrorCode == SocketError.Interrupted)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Fail silently or capture telemetry here
+                }
             }
         }
 
-        public void ExecuteHolePunch(List<PeerEndpoint> peers)
+        public async Task ExecuteHolePunchAsync(List<PeerEndpoint> peers)
         {
-            LobbyCts?.Cancel();
+            if (LobbyCts != null) await LobbyCts.CancelAsync();
             byte[] punchToken = Encoding.UTF8.GetBytes("PUNCH");
 
             foreach (var peer in peers)
             {
-                IPEndPoint peerEP = new(IPAddress.Parse(peer.Ip), peer.Port);
-                for (int i = 0; i < 10; i++)
+                // Fire hole punches out to BOTH the public internet WAN footprint
+                // and the internal local network footprint simultaneously.
+                if (IPAddress.TryParse(peer.Ip, out var publicIp))
                 {
-                    Socket.SendTo(punchToken, peerEP);
-                    Thread.Sleep(10);
+                    try { await Socket.SendToAsync(new ArraySegment<byte>(punchToken), SocketFlags.None, new IPEndPoint(publicIp, peer.Port)); } catch { }
+                }
+                if (IPAddress.TryParse(peer.InternalIp, out var internalIp))
+                {
+                    try { await Socket.SendToAsync(new ArraySegment<byte>(punchToken), SocketFlags.None, new IPEndPoint(internalIp, peer.InternalPort)); } catch { }
                 }
             }
 
-            try { Socket.Shutdown(SocketShutdown.Both); } catch (SocketException) { }
-            Socket.Close();
+            // Hold mapping state momentarily to allow handle migration sequence to settle
+            await Task.Delay(500);
+        }
+
+        public void Dispose()
+        {
+            if (_isDisposed) return;
+            _isDisposed = true;
+            try
+            {
+                LobbyCts?.Cancel();
+                if (Socket.Connected || Socket.IsBound)
+                {
+                    Socket.Close();
+                }
+            }
+            catch { }
+            GC.SuppressFinalize(this);
         }
     }
 }

@@ -8,13 +8,24 @@ namespace RetroNetplayLauncher
 {
     public static class ConfigWriter
     {
-        // PERFORMANCE CACHE FIX: Reuse single immutable settings instance across the runtime lifecycle
         private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
         public static void WriteLaunchConfig(MatchmakerClientBase matchmaker, List<PeerEndpoint> peerRoster, string selectedCore, string romPath)
         {
             string relativeCorePath = Path.Combine("Emulators", selectedCore);
             object launchConfig;
+
+            // Find your own public footprint dynamically from the roster mapping
+            string myPublicIp = "127.0.0.1";
+            foreach (var peer in peerRoster)
+            {
+                // Identify your own entry based on port signatures
+                if (peer.InternalPort == matchmaker.LocalPort && peer.InternalIp == matchmaker.LocalIpAddress)
+                {
+                    myPublicIp = peer.Ip;
+                    break;
+                }
+            }
 
             if (matchmaker.IsHost)
             {
@@ -24,7 +35,14 @@ namespace RetroNetplayLauncher
                 foreach (var peer in peerRoster)
                 {
                     if (peer.IsHost) continue;
-                    clientsList.Add(new { Slot = assignedSlot, IP = peer.Ip, peer.Port });
+
+                    // If the guest shares your public IP, they are on your local network
+                    bool isLocalNetworkPeer = peer.Ip == myPublicIp || myPublicIp == "127.0.0.1";
+
+                    string targetIp = isLocalNetworkPeer ? peer.InternalIp : peer.Ip;
+                    int targetPort = isLocalNetworkPeer ? peer.InternalPort : peer.Port;
+
+                    clientsList.Add(new { Slot = assignedSlot, IP = targetIp, Port = targetPort });
                     assignedSlot++;
                 }
 
@@ -44,8 +62,13 @@ namespace RetroNetplayLauncher
 
                 if (peerRoster.Count > 0)
                 {
-                    hostIp = peerRoster[0].Ip;
-                    hostPort = peerRoster[0].Port;
+                    var hostPeer = peerRoster[0]; // Host is always index 0
+
+                    // If you share the host's public IP, use their internal LAN details
+                    bool isLocalNetworkPeer = hostPeer.Ip == myPublicIp || myPublicIp == "127.0.0.1";
+
+                    hostIp = isLocalNetworkPeer ? hostPeer.InternalIp : hostPeer.Ip;
+                    hostPort = isLocalNetworkPeer ? hostPeer.InternalPort : hostPeer.Port;
                 }
 
                 launchConfig = new
@@ -59,10 +82,8 @@ namespace RetroNetplayLauncher
                 };
             }
 
-            // Reference our statically cached serialization options here
             string jsonString = JsonSerializer.Serialize(launchConfig, SerializerOptions);
             string targetConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "engine_config.json");
-
             File.WriteAllText(targetConfigPath, jsonString);
         }
     }

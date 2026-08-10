@@ -3,6 +3,7 @@ using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace RetroNetplayCore
 {
@@ -13,29 +14,25 @@ namespace RetroNetplayCore
         private readonly IPEndPoint[] _clientEndPoints = new IPEndPoint[4]; // Slots 1, 2, 3
         private readonly IPEndPoint? _hostEndPoint;
 
-        // Host Constructor
-        public NetworkLink(int localPort)
+        /// <summary>
+        /// INHERITED HANDEOVER CONSTRUCTOR: Uses public SafeSocketHandle to absorb 
+        /// the unmanaged socket handle cleanly.
+        /// </summary>
+        public NetworkLink(SafeSocketHandle inheritedSocketHandle, bool isHost, string hostAddress = "127.0.0.1", int hostPort = 8000)
         {
-            _isHost = true;
-            _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            _isHost = isHost;
 
-            // Overrides native kernel locks so the Core can instantly claim the port
-            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _socket.Bind(new IPEndPoint(IPAddress.Any, localPort));
-            _socket.Blocking = false;
-        }
+            // Reclaim the handle into .NET using a public constructor signature
+            _socket = new Socket(inheritedSocketHandle)
+            {
+                // Keep frame updates free of synchronous delays
+                Blocking = false
+            };
 
-        // Client Constructor
-        public NetworkLink(int localPort, string hostAddress, int hostPort)
-        {
-            _isHost = false;
-            _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-
-            // Overrides native kernel locks so the Core can instantly claim the port
-            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _socket.Bind(new IPEndPoint(IPAddress.Any, localPort));
-            _socket.Blocking = false;
-            _hostEndPoint = new IPEndPoint(IPAddress.Parse(hostAddress), hostPort);
+            if (!_isHost)
+            {
+                _hostEndPoint = new IPEndPoint(IPAddress.Parse(hostAddress), hostPort);
+            }
         }
 
         public void RegisterClient(int playerSlot, string ipAddress, int port)
@@ -44,9 +41,6 @@ namespace RetroNetplayCore
             _clientEndPoints[playerSlot] = new IPEndPoint(IPAddress.Parse(ipAddress), port);
         }
 
-        /// <summary>
-        /// CLIENT METHOD: Sends local controller inputs up to the central host.
-        /// </summary>
         public void ClientSendInput(ref ClientInputPacket packet)
         {
             ReadOnlySpan<byte> sendSpan = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref packet, 1));
@@ -59,18 +53,14 @@ namespace RetroNetplayCore
                 ex.SocketErrorCode == SocketError.ConnectionReset ||
                 ex.SocketErrorCode == SocketError.ConnectionRefused)
             {
-                // INTERNET ACCESSIBILITY FIX: Silently swallow ICMP port returns or disconnects 
-                // to maintain continuous frame replication down the pipeline.
+                // Silently drop errors to maintain continuous frame replication
             }
-            catch (Exception)
+            catch
             {
-                // Prevent unmanaged thread crashing
+                // Protect loop thread stability
             }
         }
 
-        /// <summary>
-        /// HOST METHOD: Broadcasts the aggregated 4-player inputs to every connected client.
-        /// </summary>
         public void HostBroadcastFrame(ref HostFramePacket masterPacket)
         {
             ReadOnlySpan<byte> sendSpan = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref masterPacket, 1));
@@ -89,18 +79,14 @@ namespace RetroNetplayCore
                 ex.SocketErrorCode == SocketError.ConnectionReset ||
                 ex.SocketErrorCode == SocketError.ConnectionRefused)
             {
-                // INTERNET ACCESSIBILITY FIX: Ignore unreachable client returns on broadcast routes 
-                // so an internet drop on one slot doesn't kill the simulation for everyone else.
+                // Ignore dropped clients so they don't break the simulation for everyone else
             }
-            catch (Exception)
+            catch
             {
-                // Protect loop boundary consistency
+                // Protect loop execution path consistency
             }
         }
 
-        /// <summary>
-        /// HOST METHOD: Reads an incoming individual packet from a client and identifies their player slot.
-        /// </summary>
         public bool HostReceiveInput(ref ClientInputPacket incomingPacket, out int outPlayerSlot)
         {
             outPlayerSlot = -1;
@@ -129,9 +115,6 @@ namespace RetroNetplayCore
             }
         }
 
-        /// <summary>
-        /// CLIENT METHOD: Awaits the master 4-player synchronized frame packet from the host.
-        /// </summary>
         public bool ClientReceiveFrame(ref HostFramePacket masterPacket)
         {
             Span<byte> recvSpan = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref masterPacket, 1));

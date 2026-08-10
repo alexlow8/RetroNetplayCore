@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Threading;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using RetroNetplayCore.Emulator;
 using RetroNetplayCore.Synchronization;
 using RetroNetplayCore.Configuration;
 using RetroNetplayCore.Packets;
+using System.Net.Sockets;
 
 namespace RetroNetplayCore
 {
@@ -16,30 +18,49 @@ namespace RetroNetplayCore
         [LibraryImport("winmm.dll", EntryPoint = "timeEndPeriod")]
         private static partial int TimeEndPeriod(uint uPeriod);
 
-        // 1. We keep 'args' as a normal name to prevent scope clashing inside the method
-#pragma warning disable IDE0060 // Safely tell the compiler to silence the unused parameter warning
         static void Main(string[] args)
-#pragma warning restore IDE0060
         {
             Console.WriteLine("=== Modular 4-Player High Performance Multiplexing Engine ===");
-
-            // 2. Because '_' is not claimed by the parameter, this works perfectly as a local discard!
             _ = TimeBeginPeriod(1);
 
             try
             {
-                // 3. Load configuration safely via decoupled engine config block
+                long inheritedSocketValue = -1;
+
+                // 1. Scan command-line parameters to locate the inherited handle token
+                for (int i = 0; i < args.Length; i++)
+                {
+                    if (args[i] == "--inherited-socket" && i + 1 < args.Length)
+                    {
+                        if (!long.TryParse(args[i + 1], out inheritedSocketValue))
+                        {
+                            inheritedSocketValue = -1; // Force fallback value on bad parse data
+                        }
+                        break;
+                    }
+                }
+
+                if (inheritedSocketValue == -1)
+                {
+                    throw new InvalidOperationException("💥 Boot Error: No inherited socket handle was provided by the launcher setup instance.");
+                }
+
+                // 2. Wrap the raw handle in a secure operating system handle wrapper
+                IntPtr socketHandlePtr = new(inheritedSocketValue);
+                // setting 'ownsHandle: true' means when this Core app terminates, the OS automatically drops the port.
+                SafeSocketHandle safeSocketWrapper = new(socketHandlePtr, ownsHandle: true);
+
+                // 3. Load configurations from the disk file engine mapping config
                 EngineConfig config = EngineConfig.Load("engine_config.json");
 
-                // 4. Initialize Core Subsystems based on configurations
-                InputManager input = new(0); // Sample Local controller on hardware slot 0
-                NetworkLink network;
+                // 4. instance initialization for the hardware input subsystem
+                InputManager input = new(0); // Hardware slot 0 local controller binding
+
+                // 4. Initialize Network Link using our handle injection constructor
+                NetworkLink network = new(safeSocketWrapper, config.IsHost, config.HostAddress, config.HostPort);
 
                 if (config.IsHost)
                 {
-                    network = new NetworkLink(config.LocalPort);
-
-                    // Register all remote clients defined by your Launcher config setup
                     for (int i = 1; i < 4; i++)
                     {
                         if (config.ActiveSlots[i])
@@ -51,43 +72,36 @@ namespace RetroNetplayCore
                 }
                 else
                 {
-                    network = new NetworkLink(config.LocalPort, config.HostAddress, config.HostPort);
                     Console.WriteLine($"🌐 Running in CLIENT mode. Targeting host: {config.HostAddress}:{config.HostPort}");
                 }
 
-                // 5. Inject the explicit synchronization engine style based on runtime role assignment
+                // 5. Setup Synchronization Strategies
                 INetplaySyncEngine syncEngine = config.IsHost
                     ? new HostSyncEngine(network, config.ActiveSlots)
                     : new ClientSyncEngine(network);
 
-                // 6. Fire up the Libretro environment orchestration components
+                // 6. Launch Emulator Ecosystem Context
                 EmulatorManager emulator = new();
-
                 Console.WriteLine($"\n⚡ Subsystems Active. Spinning up Emulator Core...");
                 emulator.Start(config.CorePath, config.RomPath);
 
                 Console.WriteLine($"\n🎮 Core Booted. Operational loop active. Press Ctrl+C to terminate.\n");
 
-                // Timing metrics
                 long ticksPerFrame = TimeSpan.TicksPerSecond / 60;
                 long nextFrameTick = DateTime.UtcNow.Ticks;
                 uint frameCounter = 0;
                 HostFramePacket masterFrame = default;
 
-                // 7. High-Precision Native Frame Processing Loop
+                // 7. High-Precision Execution Frame Loop
                 while (true)
                 {
                     long currentTicks = DateTime.UtcNow.Ticks;
 
                     if (currentTicks >= nextFrameTick)
                     {
-                        // Capture local physical inputs from hardware
                         ClientInputPacket localInput = input.CaptureFrame(frameCounter);
 
-                        // Run Isolated Subsystem Sync Phase (Fills our masterFrame via pointer reference)
                         syncEngine.ProcessFrameSync(frameCounter, ref localInput, ref masterFrame);
-
-                        // Pass the unified multi-player packet states down to Libretro controller ports
                         emulator.UpdateFrameStates(ref masterFrame);
 
                         frameCounter++;

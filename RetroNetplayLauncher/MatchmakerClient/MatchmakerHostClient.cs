@@ -1,5 +1,4 @@
-﻿using RetroNetplayLauncher.MatchmakerClient;
-using System;
+﻿using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -9,36 +8,29 @@ using System.Threading.Tasks;
 
 namespace RetroNetplayLauncher.MatchmakerClient
 {
-    public class MatchmakerHostClient : MatchmakerClientBase
+    public class MatchmakerHostClient(string serverIpAddress) : MatchmakerClientBase(serverIpAddress)
     {
         public override bool IsHost => true;
 
-        public MatchmakerHostClient(string serverIpAddress) : base(serverIpAddress) { }
-
-        public string HostSession(int maxPlayers, string selectedCore, string romPath)
+        public async Task<string> HostSessionAsync(int maxPlayers, string selectedCore, string romPath)
         {
-            var request = new
+            var request = new HostRequest
             {
-                command = "HOST",
-                maxPlayers,
-                selectedCore,
-                romPath = System.IO.Path.GetFileName(romPath)
+                Command = "HOST",
+                MaxPlayers = maxPlayers,
+                CoreName = selectedCore,
+                RomPath = System.IO.Path.GetFileName(romPath),
+                InternalIp = LocalIpAddress,
+                InternalPort = LocalPort
             };
 
             byte[] data = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request));
-            Socket.SendTo(data, ServerEndPoint);
+            await Socket.SendToAsync(new ArraySegment<byte>(data), SocketFlags.None, ServerEndPoint);
 
             byte[] buffer = new byte[1024];
-            EndPoint remoteEP = new IPEndPoint(IPAddress.Any, 0);
+            var result = await Socket.ReceiveFromAsync(new ArraySegment<byte>(buffer), SocketFlags.None, new IPEndPoint(IPAddress.Any, 0));
 
-            int received = 0;
-            while (received == 0)
-            {
-                if (Socket.Available > 0) received = Socket.ReceiveFrom(buffer, ref remoteEP);
-                Thread.Sleep(10);
-            }
-
-            string json = Encoding.UTF8.GetString(buffer, 0, received);
+            string json = Encoding.UTF8.GetString(buffer, 0, result.ReceivedBytes);
             using var doc = JsonDocument.Parse(json);
             ActiveRoomCode = doc.RootElement.GetProperty("code").GetString() ?? "";
 
@@ -51,19 +43,18 @@ namespace RetroNetplayLauncher.MatchmakerClient
         private async Task StartHeartbeatLoop(CancellationToken token)
         {
             var pingPayload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { command = "PING", code = ActiveRoomCode }));
-
             while (!token.IsCancellationRequested)
             {
-                try { Socket.SendTo(pingPayload, ServerEndPoint); } catch (SocketException) { }
+                try { await Socket.SendToAsync(new ArraySegment<byte>(pingPayload), SocketFlags.None, ServerEndPoint); } catch (SocketException) { }
                 await Task.Delay(5000, token);
             }
         }
 
-        public void SignalStartGame()
+        public async Task SignalStartGameAsync()
         {
             var startRequest = new { command = "START_GAME", code = ActiveRoomCode };
             byte[] data = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(startRequest));
-            Socket.SendTo(data, ServerEndPoint);
+            await Socket.SendToAsync(new ArraySegment<byte>(data), SocketFlags.None, ServerEndPoint);
         }
     }
 }

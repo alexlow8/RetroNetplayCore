@@ -13,7 +13,7 @@ namespace RetroNetplayLauncher
             StatusTxt.Text = "Status: Enter your host friend's 4-digit code.";
         }
 
-        private void JoinFinalBtn_Click(object sender, RoutedEventArgs e)
+        private async void JoinFinalBtn_Click(object sender, RoutedEventArgs e)
         {
             string codeInput = RoomCodeTxt.Text.Trim().ToUpper();
             if (string.IsNullOrEmpty(codeInput) || codeInput.Length != 4)
@@ -31,13 +31,16 @@ namespace RetroNetplayLauncher
                 _appConfig.LastUsedServerIP = targetServerIp;
                 _appConfig.Save();
 
-                // Instantiate Guest Client variant
-                _matchmaker = new MatchmakerGuestClient(targetServerIp);
+                // 1. Declare and instantiate the explicit local variable name
+                MatchmakerGuestClient guestClient = new(targetServerIp);
+
+                // 2. Bind it safely to your parent window's shared base abstract property 
+                _matchmaker = guestClient;
                 _matchmaker.OnLobbyUpdated += Matchmaker_OnLobbyUpdated;
                 _matchmaker.OnGameStarting += Matchmaker_OnGameStarting;
 
-                // Safely cast to access the guest-specific initialization logic
-                ((MatchmakerGuestClient)_matchmaker).JoinSession(codeInput);
+                // 3. Await the asynchronous network call on the local variable instance
+                await guestClient.JoinSessionAsync(codeInput);
 
                 DisplayRoomCodeTxt.Text = $"CODE: {codeInput}";
 

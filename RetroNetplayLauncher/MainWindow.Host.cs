@@ -37,7 +37,8 @@ namespace RetroNetplayLauncher
             }
         }
 
-        private void HostFinalBtn_Click(object sender, RoutedEventArgs e)
+        // Changed to async void to handle the UI thread safely during network requests
+        private async void HostFinalBtn_Click(object sender, RoutedEventArgs e)
         {
             StatusTxt.Text = "Status: Reaching matching server...";
             HostFinalBtn.IsEnabled = ServerIpTxt.IsEnabled = RoleSelectionGrid.IsEnabled = false;
@@ -47,10 +48,10 @@ namespace RetroNetplayLauncher
                 int maxPlayers = 2;
                 if (MaxPlayersComboBox.SelectedItem is ComboBoxItem item)
                 {
+                    // Check the boolean return value. If it fails, explicitly fall back to a safe default.
                     if (!int.TryParse(item.Content.ToString(), out maxPlayers))
                     {
                         maxPlayers = 2;
-                        Console.WriteLine("⚠️ Warning: Max players drop-down parse failed. Defaulting to 2 players.");
                     }
                 }
 
@@ -61,13 +62,14 @@ namespace RetroNetplayLauncher
                 string selectedCore = EmulatorComboBox.SelectedItem?.ToString() ?? "MockLibretroCore.dll";
                 string romPath = RomPathTxt.Text;
 
-                // Instantiate Host Client variant
-                _matchmaker = new MatchmakerHostClient(targetServerIp);
+                var hostClient = new MatchmakerHostClient(targetServerIp);
+                _matchmaker = hostClient;
                 _matchmaker.OnLobbyUpdated += Matchmaker_OnLobbyUpdated;
                 _matchmaker.OnGameStarting += Matchmaker_OnGameStarting;
 
-                // Safely cast to access the host-specific initialization logic
-                DisplayRoomCodeTxt.Text = $"CODE: {((MatchmakerHostClient)_matchmaker).HostSession(maxPlayers, selectedCore, romPath)}";
+                // Non-blocking asynchronous network handshake call
+                string code = await hostClient.HostSessionAsync(maxPlayers, selectedCore, romPath);
+                DisplayRoomCodeTxt.Text = $"CODE: {code}";
 
                 HostConfigPanel.Visibility = Visibility.Collapsed;
                 LobbyPanel.Visibility = Visibility.Visible;
@@ -82,12 +84,12 @@ namespace RetroNetplayLauncher
             }
         }
 
-        private void StartGameBtn_Click(object sender, RoutedEventArgs e)
+        private async void StartGameBtn_Click(object sender, RoutedEventArgs e)
         {
             StartGameBtn.IsEnabled = false;
             if (_matchmaker is MatchmakerHostClient hostClient)
             {
-                hostClient.SignalStartGame();
+                await hostClient.SignalStartGameAsync();
             }
         }
     }

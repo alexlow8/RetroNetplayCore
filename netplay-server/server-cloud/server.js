@@ -15,12 +15,10 @@ function generateRoomCode() {
     return code;
 }
 
-// Background Cleanup Loop
 setInterval(() => {
     const now = Date.now();
     for (const roomCode in rooms) {
         if (now - rooms[roomCode].lastPing > LOBBY_TIMEOUT_MS) {
-            console.log(`[Timeout] Room ${roomCode} closed. Host disconnected.`);
             delete rooms[roomCode];
         }
     }
@@ -28,37 +26,35 @@ setInterval(() => {
 
 server.on('message', (msg, rinfo) => {
     let data;
-    try {
-        data = JSON.parse(msg.toString());
-    } catch (e) {
-        return; 
-    }
+    try { data = JSON.parse(msg.toString()); } catch (e) { return; }
 
-    const senderIP = rinfo.address;
-    const senderPort = rinfo.port;
+    // Server-side discovery of the public-facing transport endpoint
+    const publicIP = rinfo.address;
+    const publicPort = rinfo.port;
 
     // --- COMMAND: HOST ---
     if (data.command === 'HOST') {
         const roomCode = generateRoomCode();
-        
-        // Read dynamic player limit from the XAML launcher (default to 2 if not sent)
         const allowedPlayers = parseInt(data.maxPlayers) || 2; 
 
         rooms[roomCode] = {
             lastPing: Date.now(),
-            maxPlayers: allowedPlayers, // Store the specific core's player limit
-            coreName: data.coreName || "MockLibretroCore.dll", // 🔥 EXTRACT AND CACHE SELECTIONS
-            romPath: data.romPath || "",                       // 🔥 EXTRACT AND CACHE SELECTIONS
+            maxPlayers: allowedPlayers, 
+            coreName: data.coreName || "MockLibretroCore.dll", 
+            romPath: data.romPath || "",                       
             players: [
-                { ip: senderIP, port: senderPort, isHost: true }
+                { 
+                    ip: publicIP, 
+                    port: publicPort, 
+                    internalIp: data.internalIp || publicIP, 
+                    internalPort: parseInt(data.internalPort) || publicPort, 
+                    isHost: true 
+                }
             ]
         };
 
-        console.log(`[Host] Room ${roomCode} created (${allowedPlayers} Players Max) by Host at ${senderIP}:${senderPort}`);
-        console.log(`       Target Core: ${rooms[roomCode].coreName} | Target ROM: ${rooms[roomCode].romPath || 'None'}`);
-        
-        const response = JSON.stringify({ status: 'ROOM_CREATED', code: roomCode });
-        server.send(response, senderPort, senderIP);
+        console.log(`[Host] Room ${roomCode} opened by ${publicIP}:${publicPort} (LAN: ${data.internalIp}:${data.internalPort})`);
+        server.send(JSON.stringify({ status: 'ROOM_CREATED', code: roomCode }), rinfo.port, rinfo.address);
     }
 
     // --- COMMAND: PING ---
@@ -66,9 +62,9 @@ server.on('message', (msg, rinfo) => {
         const roomCode = data.code;
         if (rooms[roomCode]) {
             rooms[roomCode].lastPing = Date.now();
-            server.send(JSON.stringify({ status: 'PONG' }), senderPort, senderIP);
+            server.send(JSON.stringify({ status: 'PONG' }), rinfo.port, rinfo.address);
         } else {
-            server.send(JSON.stringify({ status: 'ERROR', message: 'Room expired' }), senderPort, senderIP);
+            server.send(JSON.stringify({ status: 'ERROR', message: 'Room expired' }), rinfo.port, rinfo.address);
         }
     }
 
@@ -78,24 +74,27 @@ server.on('message', (msg, rinfo) => {
         const room = rooms[roomCode];
 
         if (!room) {
-            server.send(JSON.stringify({ status: 'ERROR', message: 'Room not found' }), senderPort, senderIP);
+            server.send(JSON.stringify({ status: 'ERROR', message: 'Room not found' }), rinfo.port, rinfo.address);
             return;
         }
 
-        // DYNAMIC CHECK: Evaluate against the room's specific limit instead of a hardcoded 4
         if (room.players.length >= room.maxPlayers) {
-            console.log(`[Join Denied] Player tried to join Room ${roomCode}, but it is full (${room.maxPlayers}/${room.maxPlayers})`);
-            server.send(JSON.stringify({ status: 'ERROR', message: 'Room is full' }), senderPort, senderIP);
+            server.send(JSON.stringify({ status: 'ERROR', message: 'Room is full' }), rinfo.port, rinfo.address);
             return;
         }
 
-        const newPlayer = { ip: senderIP, port: senderPort, isHost: false };
+        const newPlayer = { 
+            ip: publicIP, 
+            port: publicPort, 
+            internalIp: data.internalIp || publicIP, 
+            internalPort: parseInt(data.internalPort) || publicPort, 
+            isHost: false 
+        };
         room.players.push(newPlayer);
         
-        console.log(`[Join] Player ${room.players.length}/${room.maxPlayers} joined Room ${roomCode}`);
+        console.log(`[Join] Room ${roomCode} joined by ${publicIP}:${publicPort} (LAN: ${data.internalIp}:${data.internalPort})`);
         room.lastPing = Date.now();
 
-        // 🔥 ENRICH LOBBY UPDATE PAYLOAD SO NEWCOMERS DISCOVER CHOSEN CORE/ROM DETAILS INSTANTLY
         const updatePayload = JSON.stringify({
             status: 'LOBBY_UPDATE',
             playerIndex: room.players.length - 1, 
@@ -105,7 +104,12 @@ server.on('message', (msg, rinfo) => {
         });
 
         for (const player of room.players) {
-            server.send(updatePayload, player.port, player.ip);
+            // Send back to the immediate rinfo channel if managing the active sender context
+            if (player.ip === publicIP && player.port === publicPort) {
+                server.send(updatePayload, rinfo.port, rinfo.address);
+            } else {
+                server.send(updatePayload, player.port, player.ip);
+            }
         }
     }
 
@@ -114,10 +118,7 @@ server.on('message', (msg, rinfo) => {
         const roomCode = data.code;
         const room = rooms[roomCode];
 
-        if (room && room.players[0].ip === senderIP && room.players[0].port === senderPort) {
-            console.log(`[Start] Host started game for Room ${roomCode}. Closing lobby.`);
-            
-            // 🔥 ENRICH START PAYLOAD SO CLIENTS GET THE FINAL VALIDATED CORE/ROM VALUES ON DISPATCH
+        if (room) {
             const startPayload = JSON.stringify({ 
                 status: 'GAME_STARTING',
                 coreName: room.coreName,
@@ -125,16 +126,15 @@ server.on('message', (msg, rinfo) => {
             });
             
             for (const player of room.players) {
-                server.send(startPayload, player.port, player.ip);
+                if (player.ip === publicIP && player.port === publicPort) {
+                    server.send(startPayload, rinfo.port, rinfo.address);
+                } else {
+                    server.send(startPayload, player.port, player.ip);
+                }
             }
-
             delete rooms[roomCode];
         }
     }
-});
-
-server.on('listening', () => {
-    console.log(`[Ready] Dynamic Matchmaking Server live on port ${PORT}`);
 });
 
 server.bind(PORT);
