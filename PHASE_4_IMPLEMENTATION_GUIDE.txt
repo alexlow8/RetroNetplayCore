@@ -1,0 +1,622 @@
+// ==============================================================================
+// PHASE 4: IMPLEMENTATION GUIDE - HANDSHAKE + ROLLBACK NETPLAY
+// ==============================================================================
+//
+// OVERVIEW:
+// This phase implements the complete netplay system with two parallel paths:
+// 1. ROLLBACK PATH: For cores supporting serialization (Snes9x, Genesis, etc.)
+// 2. FRAME-SYNC PATH: Fallback for cores without serialization
+//
+// Both paths share:
+// - Handshake mechanism (Phase 4B)
+// - Input protocol (Phase 4A - already defined in PHASE_4A_INPUT_PROTOCOL.md)
+// - Capability detection (Phase 4B)
+// - Conditional logic based on core capability
+//
+// Status: Phases 1-3 ✅, Phase 4A Protocol ✅, Implementation ready
+//
+
+// ==============================================================================
+// ARCHITECTURAL OVERVIEW
+// ==============================================================================
+//
+// THREAD MODEL:
+//
+//   Frame Thread (60 FPS, Zero Allocation):
+//   ┌─────────────────────────────────────────────────────────────┐
+//   │ Main Loop (Program.cs)                                      │
+//   │ 1. Load local input from controller                         │
+//   │ 2. Call networkManager.PublishLocalInput(frameNumber, input)│
+//   │ 3. Call inputs[] = networkManager.GetFrameInputs(frameNumber)
+//   │ 4. Execute frame with inputs[]                             │
+//   │ 5. Render                                                  │
+//   │ ⚠️  MUST NOT ALLOCATE MEMORY                               │
+//   └─────────────────────────────────────────────────────────────┘
+//
+//   Network Thread (Runs continuously, background):
+//   ┌─────────────────────────────────────────────────────────────┐
+//   │ NetworkThreadManager.NetworkThreadLoop()                   │
+//   │ 1. Poll UDP sockets (non-blocking, 100ms timeout)          │
+//   │ 2. Receive P2P messages from peers                         │
+//   │ 3. Parse and store in ring buffer (or trigger rollback)    │
+//   │ 4. Dequeue and send queued local inputs                    │
+//   │ 5. Send heartbeat to server                                │
+//   │ ✅ Allocations allowed (not frame-critical)                │
+//   └─────────────────────────────────────────────────────────────┘
+//
+// DATA FLOW:
+//
+//   INPUT PATH:
+//   Frame Thread → PublishLocalInput() → OutgoingQueue
+//                                            ↓
+//   Network Thread → Dequeue → Serialize → UDP Send → All Peers
+//
+//   RECEIVE PATH:
+//   UDP Receive → Network Thread → Deserialize → Ring Buffer
+//                                       ↓
+//   Ring Buffer → GetFrameInputs() → Frame Thread
+
+
+// ==============================================================================
+// PHASE 4B: CAPABILITY DETECTION & HANDSHAKE
+// ==============================================================================
+//
+// GOAL: Detect if core supports serialization; perform pre-game sync
+// TIME ESTIMATE: 2-3 hours
+// FILES TO MODIFY: NetworkThreadManager.cs, Program.cs, EngineConfig.cs
+//
+// STEP 1: Add Capability Detection to NetworkThreadManager
+// =========================================================
+//
+// Add this method to NetworkThreadManager.cs:
+//
+// public bool DetectSerializationSupport(IntPtr coreHandle)
+// {
+//     // Query Libretro function pointers
+//     // Return true if ALL three functions exist:
+//     // - retro_serialize_size
+//     // - retro_serialize
+//     // - retro_unserialize
+//     //
+//     // This is called at startup before frame loop begins.
+// }
+//
+// STEP 2: Initialize State Snapshots (Conditional)
+// =================================================
+//
+// if (networkManager.SupportsRollback)
+// {
+//     // Call retro_serialize_size() to get state size
+//     // Pre-allocate 26 snapshot slots (256 frames / 10 = 26)
+//     // Print: "✓ Rollback enabled (state size: X KB per snapshot)"
+// }
+// else
+// {
+//     // Skip snapshot allocation
+//     // Print: "⚠ Rollback disabled (using frame-sync-only mode)"
+// }
+//
+// STEP 3: Implement WaitForPeerHandshake()
+// =========================================
+//
+// Pre-frame loop, do handshake exchange:
+//
+// bool WaitForPeerHandshake(TimeSpan timeout)
+// {
+//     // Send HANDSHAKE message to all peers (with our MAC, public/private IPs)
+//     // Loop: Receive handshakes from all peers, track confirmations
+//     // When all 4 peers confirmed, return true
+//     // If timeout expires, print warning, return false (proceed anyway)
+//
+//     // Handshake payload (32 bytes):
+//     // - MAC address (16 bytes)
+//     // - Public IP (4 bytes)
+//     // - Public port (2 bytes)
+//     // - LAN IP (4 bytes)
+//     // - LAN port (2 bytes)
+//     // - Core version (4 bytes)
+// }
+//
+// STEP 4: Call From Program.cs
+// =============================
+//
+// Before frame loop:
+//
+// // Load config and start network thread
+// networkManager.Initialize(config);
+//
+// // Detect core capability
+// if (!networkManager.DetectSerializationSupport(coreHandle))
+// {
+//     Console.WriteLine("Note: Running without rollback netplay");
+// }
+//
+// // Wait for all peers to connect
+// if (!networkManager.WaitForPeerHandshake(TimeSpan.FromSeconds(2)))
+// {
+//     Console.WriteLine("Warning: Not all peers connected, proceeding anyway");
+// }
+//
+// // NOW start frame loop
+// int frameNumber = 0;
+// while (true) { ... }
+//
+
+
+// ==============================================================================
+// PHASE 4C: STATE SNAPSHOT MANAGER
+// ==============================================================================
+//
+// GOAL: Manage emulator state save/restore for rollback
+// TIME ESTIMATE: 1-2 hours
+// FILES TO CREATE: NetworkThreadManager.cs (add StateSnapshotManager nested class)
+//
+// DESIGN: Pre-allocated ring buffer of state snapshots
+// - Save every 10 frames (at 60 FPS = 6 saves/second)
+// - Ring buffer size = 256 / 10 = 26 slots
+// - Each slot holds one serialized state
+// - Thread-safe: Network thread writes, frame thread reads
+//
+// CLASS STRUCTURE:
+//
+// public class StateSnapshotManager
+// {
+//     private byte[][] snapshots;      // 26 slots, pre-allocated
+//     private ulong stateSize;         // Size from retro_serialize_size()
+//
+//     public void Initialize(ulong size)
+//     {
+//         // Allocate at startup ONLY
+//         stateSize = size;
+//         snapshots = new byte[26][];
+//         for (int i = 0; i < 26; i++)
+//         {
+//             snapshots[i] = new byte[size];  // Allocate once
+//         }
+//     }
+//
+//     public void SaveSnapshot(uint frameNumber, IntPtr statePtr)
+//     {
+//         // Called by network thread every 10 frames
+//         // Determine which slot: (frameNumber / 10) % 26
+//         // Marshal.Copy(statePtr, snapshots[slot], 0, (int)stateSize)
+//     }
+//
+//     public IntPtr LoadSnapshot(uint frameNumber)
+//     {
+//         // Called by frame thread during rollback
+//         // Find nearest 10-frame boundary ≤ frameNumber
+//         // Allocate new buffer (OK on frame thread outside loop)
+//         // Copy from snapshots[slot] to new buffer
+//         // Return IntPtr
+//     }
+// }
+//
+
+
+// ==============================================================================
+// PHASE 4D: ROLLBACK FRAME TRACKING
+// ==============================================================================
+//
+// GOAL: Track which peers have confirmed which frames; detect retroactive changes
+// TIME ESTIMATE: 1-2 hours
+// FILES TO MODIFY: NetworkThreadManager.cs
+//
+// DESIGN: Replace simple input ring buffer with per-frame metadata
+//
+// CLASS STRUCTURE:
+//
+// public struct RollbackFrameInfo
+// {
+//     public uint FrameNumber;              // Which frame is this?
+//     public byte[][] InputData;            // [4] = inputs from each peer
+//     public byte ConfirmationMask;         // Bitfield: which peers sent input?
+//     public int ConfirmationCount;         // 0-4: how many peers confirmed?
+//     public bool IsConfirmed => ConfirmationCount == 4;
+// }
+//
+// public class RollbackFrameBuffer
+// {
+//     private RollbackFrameInfo[] buffer = new RollbackFrameInfo[256];
+//
+//     public void WriteFrameInput(uint frameNumber, byte playerIndex, byte[] input)
+//     {
+//         int index = (int)(frameNumber & 0xFF);
+//         buffer[index].InputData[playerIndex] = input;
+//         buffer[index].ConfirmationMask |= (byte)(1 << playerIndex);
+//         buffer[index].ConfirmationCount++;
+//     }
+//
+//     public bool DidFrameChange(uint frameNumber, byte playerIndex, byte[] newInput)
+//     {
+//         // Returns true if input is DIFFERENT from what we stored
+//         // This triggers rollback detection!
+//     }
+//
+//     public uint GetHighestConfirmedFrame()
+//     {
+//         // Find highest frame# where ALL 4 peers sent input
+//     }
+// }
+//
+
+
+// ==============================================================================
+// PHASE 4E: PUBLISHLOCALINPUT() - SEND OUR INPUTS
+// ==============================================================================
+//
+// GOAL: Frame loop queues inputs; network thread sends to all peers
+// TIME ESTIMATE: 1-2 hours
+// FILES TO MODIFY: NetworkThreadManager.cs
+//
+// DESIGN: Queue-based approach (frame thread → network thread)
+//
+// Add to NetworkThreadManager:
+//
+// private struct QueuedInput
+// {
+//     public uint FrameNumber;
+//     public ClientInputPacket Input;
+// }
+//
+// private Queue<QueuedInput> outgoingQueue = new();  // Pre-allocated enough capacity
+//
+// public void PublishLocalInput(uint frameNumber, ref ClientInputPacket input)
+// {
+//     // Frame loop calls this (must be FAST, no blocking!)
+//     // Simply enqueue the input
+//     outgoingQueue.Enqueue(new QueuedInput 
+//     { 
+//         FrameNumber = frameNumber, 
+//         Input = input 
+//     });
+// }
+//
+// In NetworkThreadLoop():
+//
+// private void SendQueuedInputs()
+// {
+//     // Network thread dequeues and sends
+//     while (outgoingQueue.TryDequeue(out var queued))
+//     {
+//         byte[] packet = SerializeInputFrame(
+//             queued.FrameNumber,
+//             LocalPlayerIndex,
+//             queued.Input);
+//
+//         // Send to all peers
+//         foreach (var peer in peers)
+//         {
+//             socket.SendTo(packet, peer.Endpoint);
+//         }
+//     }
+// }
+//
+
+
+// ==============================================================================
+// PHASE 4F: RECEIVEP2PMESSAGES() - RECEIVE PEER INPUTS & ROLLBACK
+// ==============================================================================
+//
+// GOAL: Network thread receives inputs; detects late arrivals and triggers rollback
+// TIME ESTIMATE: 2-3 hours
+// FILES TO MODIFY: NetworkThreadManager.cs
+//
+// DESIGN: Conditional logic based on core capability
+//
+// if (supportsRollback)
+// {
+//     // ROLLBACK MODE
+//     // 1. Receive P2P message
+//     // 2. If frameNumber < executedFrame:
+//     //    - Check if input changed
+//     //    - If different: Trigger rollback!
+//     // 3. Store in ring buffer
+// }
+// else
+// {
+//     // FRAME-SYNC MODE
+//     // 1. Receive P2P message
+//     // 2. Store in ring buffer (no rollback)
+//     // 3. Update confirmation mask
+// }
+//
+// PSEUDOCODE:
+//
+// private void ReceiveP2PMessages(byte[] buffer)
+// {
+//     while (socket.ReceiveFrom(buffer, out int length, out EndPoint remote))
+//     {
+//         byte[] packet = new byte[length];
+//         Array.Copy(buffer, packet, length);
+//
+//         P2PMessage msg = Deserialize(packet);
+//
+//         if (msg.Type == INPUT_FRAME)
+//         {
+//             if (supportsRollback && msg.FrameNumber < executedFrame)
+//             {
+//                 // Late arrival!
+//                 if (DidFrameChange(msg.FrameNumber, msg.PlayerIndex, msg.Input))
+//                 {
+//                     Console.WriteLine($"ROLLBACK: Frame {msg.FrameNumber} changed");
+//                     NeedRollback = true;
+//                     RollbackToFrame = msg.FrameNumber;
+//                 }
+//             }
+//
+//             ringBuffer.WriteFrameInput(msg.FrameNumber, msg.PlayerIndex, msg.Input);
+//         }
+//         else if (msg.Type == STATE_SNAPSHOT && supportsRollback)
+//         {
+//             stateManager.SaveSnapshot(msg.FrameNumber, msg.State);
+//         }
+//     }
+// }
+//
+
+
+// ==============================================================================
+// PHASE 4G: FRAME LOOP INTEGRATION
+// ==============================================================================
+//
+// GOAL: Modify Program.cs frame loop to use new synchronization
+// TIME ESTIMATE: 2-3 hours
+// FILES TO MODIFY: Program.cs
+//
+// FRAME LOOP STRUCTURE:
+//
+// int executedFrame = 0;
+// int predictedFrame = 0;
+//
+// while (true)
+// {
+//     // Check if rollback occurred
+//     if (networkManager.NeedRollback)
+//     {
+//         int targetFrame = networkManager.RollbackToFrame;
+//
+//         // Load state from snapshot
+//         byte[] savedState = stateManager.LoadSnapshot(targetFrame);
+//         retro_unserialize(savedState);
+//
+//         // Re-execute frames with corrected input
+//         for (int i = targetFrame; i < executedFrame; i++)
+//         {
+//             var inputs = networkManager.GetFrameInputs(i);
+//             ExecuteFrame(inputs);
+//         }
+//
+//         networkManager.NeedRollback = false;
+//         executedFrame = predictedFrame;  // Continue from where we left off
+//     }
+//
+//     // Load local controller input
+//     var localInput = ReadControllerInput();
+//
+//     // Send to network thread
+//     networkManager.PublishLocalInput(executedFrame, ref localInput);
+//
+//     // Get merged inputs for this frame
+//     var frameInputs = networkManager.GetFrameInputs(executedFrame);
+//
+//     // Execute frame
+//     retro_run(frameInputs);
+//
+//     // Save state snapshot (every 10 frames if rollback enabled)
+//     if (supportsRollback && executedFrame % 10 == 0)
+//     {
+//         byte[] state = new byte[stateSize];
+//         retro_serialize(state);
+//         networkManager.SaveSnapshot(executedFrame, state);
+//     }
+//
+//     executedFrame++;
+//     predictedFrame = executedFrame;
+//
+//     // Frame rate control
+//     Thread.Sleep(16);  // 60 FPS = 16.67ms
+// }
+//
+
+
+// ==============================================================================
+// PHASE 4H: DROPOUT HANDLING
+// ==============================================================================
+//
+// GOAL: Respond to PLAYER_DISCONNECTED signal from server
+// TIME ESTIMATE: 1-2 hours
+// FILES TO MODIFY: NetworkThreadManager.cs, Program.cs
+//
+// When server sends PLAYER_DISCONNECTED:
+// 1. Network thread receives message from server
+// 2. Sets flag: DisconnectedPlayerIndex = X
+// 3. Frame thread detects flag
+// 4. Decision: Pause game or zero inputs?
+//
+// APPROACH (Recommended):
+// - Zero inputs for disconnected player
+// - Game continues playable (1v3 mode)
+// - Log: "Player 2 disconnected, zeroing their inputs"
+//
+// PSEUDOCODE:
+//
+// if (networkManager.PlayerDisconnected)
+// {
+//     Console.WriteLine($"Player {networkManager.DisconnectedPlayerIndex} disconnected");
+//
+//     // Zero inputs for that player in future frames
+//     networkManager.ZeroPlayerInputs(networkManager.DisconnectedPlayerIndex);
+//
+//     // Reset flag
+//     networkManager.PlayerDisconnected = false;
+// }
+//
+
+
+// ==============================================================================
+// PHASE 4I: INTEGRATION TESTING
+// ==============================================================================
+//
+// GOAL: Verify netplay system works end-to-end
+// TIME ESTIMATE: 3-4 hours
+// ENVIRONMENT: Local machine, then LAN, then over internet
+//
+// TEST 1: Local 2-Core Test
+// ==========================
+// - Run 2 cores on same machine
+// - Verify P2P sockets connect
+// - Play for 10 seconds (600 frames)
+// - Verify zero allocation (GC.GetTotalMemory() doesn't grow)
+// - Verify inputs sync (press button on P1, appears in P2)
+//
+// TEST 2: LAN Test
+// ================
+// - 2 PCs on same network
+// - Verify LAN routing (uses internal IPs)
+// - Latency measurement (should be <10ms)
+// - Play for 60 seconds
+//
+// TEST 3: Rollback Test (if supported)
+// ======================================
+// - 2 cores, one with network jitter simulation
+// - Inject 100-200ms delays on some packets
+// - Verify rollback detection
+// - Verify game remains in sync
+//
+// TEST 4: Dropout Test
+// ====================
+// - 4 cores connected
+// - Kill one core mid-game
+// - Verify PLAYER_DISCONNECTED received
+// - Game continues (3 players)
+//
+// TEST 5: Performance Test
+// =========================
+// - Run 1000 frames
+// - Measure GC collections (should be ZERO)
+// - Measure frame time variance (<1ms variance acceptable)
+//
+
+
+// ==============================================================================
+// PHASE 4 EXECUTION ORDER
+// ==============================================================================
+//
+// 1. ✅ Phase 4A: Protocol spec (COMPLETE - PHASE_4A_INPUT_PROTOCOL.md)
+// 2. → Phase 4B: Capability detection + handshake
+// 3. → Phase 4C: State snapshot manager
+// 4. → Phase 4D: Rollback frame tracking
+// 5. → Phase 4E: PublishLocalInput() implementation
+// 6. → Phase 4F: ReceiveP2PMessages() + rollback execution
+// 7. → Phase 4G: Frame loop integration
+// 8. → Phase 4H: Dropout handling
+// 9. → Phase 4I: Integration testing
+//
+// ESTIMATED TOTAL TIME: 14-18 hours of implementation + 3-4 hours testing
+//
+
+
+// ==============================================================================
+// QUICK REFERENCE: KEY CLASSES TO MODIFY/CREATE
+// ==============================================================================
+//
+// NetworkThreadManager.cs:
+//   - Add: DetectSerializationSupport()
+//   - Add: StateSnapshotManager (nested class)
+//   - Add: RollbackFrameInfo struct
+//   - Add: RollbackFrameBuffer class
+//   - Add: QueuedInput struct
+//   - Modify: NetworkThreadLoop() (call SendQueuedInputs, ReceiveP2PMessages)
+//   - Modify: PublishLocalInput() (queue instead of stub)
+//   - Modify: GetFrameInputs() (use rollback buffer)
+//   - Add: ReceiveP2PMessages() (parse and store/rollback)
+//   - Add: WaitForPeerHandshake()
+//
+// Program.cs:
+//   - Modify: Main() - call DetectSerializationSupport before frame loop
+//   - Modify: Main() - call WaitForPeerHandshake
+//   - Modify: Frame loop - check NeedRollback, trigger restore
+//   - Modify: Frame loop - call PublishLocalInput
+//   - Modify: Frame loop - save snapshots (if supported)
+//   - Add: RollbackToFrame() method
+//
+// EngineConfig.cs:
+//   - Add: NetworkConfig section (optional, for tuning)
+//   - Add: EnableRollback flag (auto-detected but can override)
+//
+
+
+// ==============================================================================
+// NOTES & WARNINGS
+// ==============================================================================
+//
+// ⚠️  Zero Allocation Constraint:
+//     - Frame loop MUST NOT allocate memory
+//     - All buffers pre-allocated at startup
+//     - GC collections = frame drops (bad!)
+//
+// ⚠️  Thread Safety:
+//     - Ring buffer: single-writer (network), single-reader (frame)
+//     - Outgoing queue: frame thread enqueues, network thread dequeues
+//     - Use lock-free queue if possible, or simple lock for outgoing
+//     - Use CriticalSection or SpinLock for minimal contention
+//
+// ⚠️  Rollback Complexity:
+//     - Only works if core implements serialize/unserialize
+//     - State size can be large (1 MB for N64)
+//     - Snapshots every 10 frames = ~6 KB/frame at 60 FPS
+//
+// ⚠️  Network Assumptions:
+//     - Frame rate = 60 FPS (16.67ms per frame)
+//     - Typical latency: 10-50ms (LAN), 50-200ms (internet)
+//     - Timeout: 50ms for frame-sync, 500ms for rollback
+//
+// ⚠️  Libretro Integration:
+//     - Each core may have different input layout
+//     - StandardInput format is a baseline
+//     - Some cores need core-specific extensions
+//
+// ⚠️  Error Recovery:
+//     - Checksum mismatch = drop packet (don't corrupt state)
+//     - Handshake timeout = warn but continue (some peers may be slow)
+//     - Late peer join = reject for now (can extend in future)
+//
+
+
+// ==============================================================================
+// QUESTIONS FOR IMPLEMENTATION
+// ==============================================================================
+//
+// 1. Outgoing queue: Lock or lock-free?
+//    Recommendation: Simple Queue<T> with lock (simpler than lock-free)
+//
+// 2. Rollback trigger: Who decides to rollback?
+//    Answer: Frame thread detects via flag set by network thread
+//
+// 3. State save timing: Every frame or every 10?
+//    Answer: Every 10 frames (reduces memory churn)
+//
+// 4. What if peer state is different size than expected?
+//    Answer: Reject and log error (memcpy would overflow)
+//
+// 5. What if core doesn't have serialize on startup?
+//    Answer: Continue with frame-sync-only mode (acceptable fallback)
+//
+
+
+// ==============================================================================
+// SUCCESS CRITERIA
+// ==============================================================================
+//
+// ✅ 4 cores connect via handshake
+// ✅ Inputs flow every frame (zero allocation)
+// ✅ Rollback-capable cores detect and recover from late packets
+// ✅ Frame-sync cores still work (just less tolerant)
+// ✅ Player dropout detected and handled
+// ✅ Zero GC collections during gameplay
+// ✅ Frame time stable (±1ms)
+// ✅ 60 FPS maintained under normal network conditions
+//
+
+

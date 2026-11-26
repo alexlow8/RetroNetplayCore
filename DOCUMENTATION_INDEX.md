@@ -91,22 +91,79 @@ You've successfully redesigned RetroNetplayCore's architecture!
 
 ---
 
-### 5. **PHASE_4_PLANNING.txt** (FOR NEXT STEPS)
-📄 **Size:** 13 KB  
-📌 **Purpose:** Detailed roadmap for Phase 4 implementation  
+### 5. **PHASE_4_KICKOFF.md** (FOR PHASE 4 OVERVIEW)
+📄 **Size:** 8 KB  
+📌 **Purpose:** Overview of Phase 4 architecture and roadmap  
 📚 **Contains:**
-- Current state at end of Phase 3
-- Phase 4A: Input Protocol (what to define)
-- Phase 4B: PublishLocalInput() (how to implement)
-- Phase 4C: GetFrameInputs() (ring buffer population)
-- Phase 4D: Sync Engines (what to update)
-- Phase 4E: Dropout Signals (error recovery)
-- Phase 4F: Testing Checklist
-- Timeline estimate (6-8 hours)
-- Code comment guidelines
-- Next action items
+- Dual-mode architecture (Rollback + Frame-Sync)
+- Mode A vs Mode B comparison table
+- Phase 4B-4I breakdown with hours
+- Critical design constraints
+- Key implementation points
+- Common pitfalls to avoid
+- Testing strategy
+- Success criteria
+- 14-18 hour implementation estimate
 
-**When to read:** Before starting Phase 4. Tells you exactly what to implement.
+**When to read:** To understand Phase 4 at a high level before diving deep.
+
+---
+
+### 6. **PHASE_4A_INPUT_PROTOCOL.md** (THE BINARY SPEC)
+📄 **Size:** 21 KB  
+📌 **Purpose:** Complete binary protocol specification for Phase 4A  
+📚 **Contains:**
+- 15-byte message header structure
+- 5 message types (HANDSHAKE, INPUT_FRAME, STATE_SNAPSHOT, FRAME_CONFIRMATION, ACK)
+- Detailed binary layouts with byte offsets
+- Input data mapping (standard 8-byte format)
+- Capability detection logic
+- Rollback mode vs Frame-Sync mode comparison
+- Thread safety patterns
+- State snapshot pre-allocation
+- Error handling (checksum validation)
+- Serialization examples (C# code)
+- Testing checklist
+- Configuration section
+- Summary table
+
+**When to read:** When implementing Phase 4B-4I. It's your protocol reference.
+
+---
+
+### 7. **PHASE_4_IMPLEMENTATION_GUIDE.txt** (FOR STEP-BY-STEP)
+📄 **Size:** 22 KB  
+📌 **Purpose:** Detailed step-by-step implementation guide  
+📚 **Contains:**
+- Architectural overview (thread model, data flow)
+- Phase 4B: Capability Detection + Handshake (with pseudocode)
+- Phase 4C: State Snapshot Manager (class structure)
+- Phase 4D: Rollback Frame Tracking (data structures)
+- Phase 4E: PublishLocalInput() (queue design)
+- Phase 4F: ReceiveP2PMessages() (conditional logic)
+- Phase 4G: Frame Loop Integration (complete pseudocode)
+- Phase 4H: Dropout Handling (error recovery)
+- Phase 4I: Integration Testing (4 test scenarios)
+- Execution order (1-9)
+- Quick reference (classes to modify/create)
+- Notes & warnings (allocation, threading, rollback)
+- Questions for implementation
+- Success criteria checklist
+
+**When to read:** Your implementation guide. Use during Phase 4 coding.
+
+---
+
+### 8. **PHASE_4_PLANNING.txt** (LEGACY - UPDATED)
+📄 **Size:** 14 KB  
+📌 **Purpose:** Original planning (now updated with new structure)  
+📚 **Contains:**
+- Phase 4A protocol spec summary (points to PHASE_4A_INPUT_PROTOCOL.md)
+- Phase 4B-C details with examples
+- Original handshake design
+- Updated with dual-mode awareness
+
+**When to read:** Reference only. PHASE_4_KICKOFF.md and PHASE_4A_INPUT_PROTOCOL.md are more current.
 
 ---
 
@@ -145,11 +202,12 @@ You've successfully redesigned RetroNetplayCore's architecture!
 2. Read: QUICK_START_GUIDE.txt (sections 4-7)
 3. Reference: ARCHITECTURE_REDESIGN_SUMMARY.md
 
-### "I want to implement Phase 4"
-1. Read: PHASE_4_PLANNING.txt (whole thing)
-2. Reference: QUICK_START_GUIDE.txt (debugging tips)
-3. Study: Synchronization/NetworkThreadManager.cs (as pattern)
-4. Examine: Packets/*.cs (input structures)
+### "I want to implement Phase 4" ⭐ **NEW PATH**
+1. Read: PHASE_4_KICKOFF.md (8 KB overview)
+2. Read: PHASE_4A_INPUT_PROTOCOL.md (21 KB binary spec)
+3. Reference: PHASE_4_IMPLEMENTATION_GUIDE.txt (step-by-step)
+4. Study: Synchronization/NetworkThreadManager.cs (as pattern)
+5. Examine: Packets/*.cs (input structures)
 
 ### "I'm lost and need help"
 1. Read: QUICK_START_GUIDE.txt (sections 2 & 8)
@@ -273,10 +331,13 @@ SESSION_SUMMARY.md ................. 13 KB
 QUICK_START_GUIDE.txt .............. 17 KB
 ARCHITECTURE_DIAGRAM.txt ........... 21 KB
 ARCHITECTURE_REDESIGN_SUMMARY.md ... 10 KB
-PHASE_4_PLANNING.txt ............... 13 KB
+PHASE_4_PLANNING.txt ............... 14 KB
+PHASE_4_KICKOFF.md ................. 8 KB
+PHASE_4A_INPUT_PROTOCOL.md ......... 21 KB
+PHASE_4_IMPLEMENTATION_GUIDE.txt ... 22 KB
 DOCUMENTATION_INDEX.md ............ (this file)
 ─────────────────────────────────────────
-Total Documentation ................ 74 KB
+Total Documentation ................ 136 KB
 ```
 
 Plus ~1,000 lines of commented C# code in source files.

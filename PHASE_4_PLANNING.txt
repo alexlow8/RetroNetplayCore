@@ -31,23 +31,35 @@
 
 
 // ==============================================================================
-// PHASE 4A: DEFINE INPUT PROTOCOL
+// PHASE 4 REVISED: HANDSHAKE + ROLLBACK ARCHITECTURE
 // ==============================================================================
 //
-// GOAL: Define the byte format for P2P messages
-// WHY: Peers need to understand each other's input data
+// NEW UNDERSTANDING:
+// 1. Handshake BEFORE frame loop (all peers sync)
+// 2. Frame-count + Rollback for runtime resilience
+// 3. Capability detection: Use rollback if core supports serialization
+// 4. Fallback: Frame-sync-only mode for cores without serialization
 //
-// DESIGN DECISION:
-// Use simple, deterministic binary protocol (not JSON!)
-// Reason: Less allocation, predictable size, easier to verify
+// See PHASE_4A_INPUT_PROTOCOL.md for complete binary format spec!
+
+
+// ==============================================================================
+// PHASE 4A: DEFINE INPUT PROTOCOL ✅
+// ==============================================================================
 //
-// PROPOSED MESSAGE FORMAT:
+// GOAL: Define byte format for P2P messages (handshake, input, state, confirmations)
+// STATUS: ✅ COMPLETE - See PHASE_4A_INPUT_PROTOCOL.md (27 KB)
 //
-// struct InputMessage {
-//     byte MessageType;              // 0x01 = Input
-//     uint FrameNumber;              // Which frame is this input for?
-//     byte PlayerIndex;              // Who sent this?
-//     ClientInputPacket Input;       // The actual input data
+// KEY POINTS:
+// - 15-byte header on all messages (type, sender, frame#, checksum, length)
+// - 5 message types: HANDSHAKE, INPUT_FRAME, STATE_SNAPSHOT, FRAME_CONFIRMATION, ACK
+// - HANDSHAKE: 32-byte payload with MAC, public/private IPs, ports
+// - INPUT_FRAME: 8-byte standard input (buttons, sticks, triggers)
+// - STATE_SNAPSHOT: Serialized emulator state (20 KB to 1 MB depending on core)
+// - Thread-safe: Single-writer (network), single-reader (frame thread)
+// - Zero allocation in frame loop: All buffers pre-allocated at startup
+//
+// NEXT: Implement capability detection (Phase 4B)
 // }
 //
 // QUESTIONS TO ANSWER:
