@@ -1,0 +1,358 @@
+// ==============================================================================
+// PHASE 4: INPUT PROTOCOL & SYNCHRONIZATION
+// ==============================================================================
+// This document outlines what needs to be implemented next.
+// Read this BEFORE diving into coding Phase 4.
+//
+// Status: ✅ Phases 1-3 Complete
+//         ⏳ Phase 4 Ready to Start
+
+// ==============================================================================
+// CURRENT STATE (End of Phase 3)
+// ==============================================================================
+//
+// ✅ Launcher
+//    - Writes config file with server & peer info
+//    - Launches core.exe
+//
+// ✅ Server (Node.js)
+//    - Tracks gameplay phase
+//    - Sends PLAYER_DISCONNECTED on dropout
+//
+// ✅ Core Startup
+//    - Loads config
+//    - Starts NetworkThreadManager
+//    - Enters frame loop
+//
+// ❌ MISSING: Actual P2P Input Transfer
+//    - Core has empty methods: GetFrameInputs() and PublishLocalInput()
+//    - Network thread binds socket but doesn't send/receive input
+//    - Sync engine still references old NetworkLink class
+
+
+// ==============================================================================
+// PHASE 4A: DEFINE INPUT PROTOCOL
+// ==============================================================================
+//
+// GOAL: Define the byte format for P2P messages
+// WHY: Peers need to understand each other's input data
+//
+// DESIGN DECISION:
+// Use simple, deterministic binary protocol (not JSON!)
+// Reason: Less allocation, predictable size, easier to verify
+//
+// PROPOSED MESSAGE FORMAT:
+//
+// struct InputMessage {
+//     byte MessageType;              // 0x01 = Input
+//     uint FrameNumber;              // Which frame is this input for?
+//     byte PlayerIndex;              // Who sent this?
+//     ClientInputPacket Input;       // The actual input data
+// }
+//
+// QUESTIONS TO ANSWER:
+// 1. What is the size of ClientInputPacket? (Check Packets/ClientInputPacket.cs)
+// 2. Do we need a CRC/checksum for packet verification?
+// 3. Should we support packet loss recovery (retransmit)?
+// 4. What's the maximum number of frames to buffer (ring size)?
+//
+// ACTION: 
+// Step 1: Examine Packets/ClientInputPacket.cs
+// Step 2: Define serialization/deserialization methods
+// Step 3: Add to NetworkThreadManager:
+//         - SerializeInputMessage()
+//         - DeserializeInputMessage()
+//         - UpdateRingBuffer()
+
+
+// ==============================================================================
+// PHASE 4B: IMPLEMENT PUBLISHLOCALINPUT()
+// ==============================================================================
+//
+// GOAL: Frame loop → Network thread: "Here's my input, send it to everyone"
+// LOCATION: NetworkThreadManager.PublishLocalInput()
+//
+// CURRENT CODE (INCOMPLETE):
+// public void PublishLocalInput(uint frameNumber, ref ClientInputPacket localInput)
+// {
+//     // TODO: Queue local input for broadcast to all peers
+// }
+//
+// WHAT IT NEEDS TO DO:
+// 1. Serialize localInput into binary message
+// 2. Send to all peers in _peerEndpoints map
+// 3. Do this NON-BLOCKING (can't wait on socket in frame loop!)
+//
+// DESIGN: Output Queue
+// Since frame loop calls this, we need a queue structure:
+//   - Frame thread: Push input to queue (lock-free if possible)
+//   - Network thread: Pop from queue, serialize, send
+//
+// PSEUDOCODE:
+// public void PublishLocalInput(uint frameNumber, ref ClientInputPacket localInput)
+// {
+//     // Store in outgoing queue (non-blocking)
+//     _outgoingInputQueue.Enqueue(new QueuedInput 
+//     { 
+//         FrameNumber = frameNumber, 
+//         Input = localInput 
+//     });
+// }
+//
+// In NetworkThreadLoop():
+// while (!cancellation.IsCancellationRequested)
+// {
+//     // Send queued inputs to all peers
+//     SendQueuedInputs();
+//     
+//     // Receive incoming inputs from peers
+//     ReceiveP2PMessages(receiveBuffer);
+// }
+//
+// QUEUE TO ADD:
+// private readonly Queue<QueuedInput> _outgoingInputQueue = new();
+//
+// DATA STRUCTURE TO ADD:
+// private struct QueuedInput
+// {
+//     public uint FrameNumber;
+//     public ClientInputPacket Input;
+// }
+
+
+// ==============================================================================
+// PHASE 4C: IMPLEMENT GETFRAMEINPUTS()
+// ==============================================================================
+//
+// GOAL: Frame loop ← Network thread: "Here's merged input for this frame"
+// LOCATION: NetworkThreadManager.GetFrameInputs()
+//
+// CURRENT CODE (INCOMPLETE):
+// public HostFramePacket GetFrameInputs(uint frameNumber)
+// {
+//     int bufferIndex = (int)(frameNumber & _ringBufferMask);
+//     return _inputRingBuffer[bufferIndex];
+// }
+//
+// WHAT IT DOES RIGHT:
+// - Uses ring buffer (already pre-allocated, good!)
+// - Non-blocking read (frame loop won't stall)
+//
+// WHAT NEEDS FIXING:
+// - Ring buffer is currently empty (never filled)
+// - Need to fill it in ReceiveP2PMessages()
+// - Need to merge all peer inputs into HostFramePacket
+//
+// PROCESS:
+// 1. Network thread receives input from peer X, frame N
+// 2. Deserialize it into the HostFramePacket
+// 3. Store in ring buffer at: (frameNumber & 0xFF)
+// 4. Frame loop reads it at: (frameNumber & 0xFF)
+//
+// SYNCHRONIZATION CONCERN:
+// Frame loop is at frame N, network might receive frame N+2
+// Frame loop is at frame N, network might still be sending frame N-1
+// This is NORMAL - buffers should hold frames N-5 to N+10 (lookahead)
+//
+// RING BUFFER LIFECYCLE:
+// Frame 0: Input arrives, stored in [0 & 0xFF] = [0]
+// Frame 1: Input arrives, stored in [1 & 0xFF] = [1]
+// ...
+// Frame 256: Input arrives, stored in [256 & 0xFF] = [0] ← Overwrites frame 0's input
+// (This is OK because frame 0 is long past)
+
+
+// ==============================================================================
+// PHASE 4D: UPDATE SYNCHRONIZATION ENGINES
+// ==============================================================================
+//
+// CURRENT PROBLEM:
+// Program.cs still uses old classes:
+//   - HostSyncEngine
+//   - ClientSyncEngine
+//   - NetworkLink (doesn't exist anymore)
+//
+// THESE NEED TO BE REWRITTEN or REMOVED
+//
+// OPTION A: Rewrite to use NetworkThreadManager
+// - HostSyncEngine: Takes HostFramePacket from NetworkThreadManager
+// - ClientSyncEngine: Calls PublishLocalInput() on NetworkThreadManager
+// - Both feed into emulator.UpdateFrameStates()
+//
+// OPTION B: Remove them entirely
+// - Frame loop handles sync directly in Program.cs
+// - Less abstraction, but simpler for now
+//
+// RECOMMENDED: Option A (cleaner architecture)
+//
+// PSEUDOCODE (Option A):
+//
+// In Program.cs:
+// INetplaySyncEngine syncEngine = config.IsHost
+//     ? new HostSyncEngine(networkManager, config.Peers)
+//     : new ClientSyncEngine(networkManager, config.LocalPort);
+//
+// In HostSyncEngine.ProcessFrameSync():
+// public void ProcessFrameSync(uint frameNumber, ref ClientInputPacket localInput, ref HostFramePacket masterFrame)
+// {
+//     // Publish our input (non-blocking queue)
+//     _networkManager.PublishLocalInput(frameNumber, ref localInput);
+//     
+//     // Get merged inputs from all peers
+//     masterFrame = _networkManager.GetFrameInputs(frameNumber);
+//     
+//     // As host, we might need to do fairness/arbitration here
+//     // (e.g., if two players press button simultaneously, who wins?)
+//     // For deterministic netplay, this should already be handled by frame number
+// }
+//
+// In ClientSyncEngine.ProcessFrameSync():
+// public void ProcessFrameSync(uint frameNumber, ref ClientInputPacket localInput, ref HostFramePacket masterFrame)
+// {
+//     // Same as host - just forward inputs and get merged result
+//     _networkManager.PublishLocalInput(frameNumber, ref localInput);
+//     masterFrame = _networkManager.GetFrameInputs(frameNumber);
+// }
+
+
+// ==============================================================================
+// PHASE 4E: HANDLE DROPOUT SIGNALS FROM SERVER
+// ==============================================================================
+//
+// GOAL: When server sends PLAYER_DISCONNECTED, core should react
+// STATUS: Server sends it, core doesn't listen yet
+//
+// WHAT NEEDS TO HAPPEN:
+// 1. Network thread receives PLAYER_DISCONNECTED message
+// 2. Marks that player's input as "dropout"
+// 3. Frame loop needs to know about it (enum? flag? event?)
+// 4. Frame loop pauses or removes that player's inputs
+//
+// QUESTIONS:
+// - Should we pause the whole game or continue without dropped player?
+// - How do we signal pause to launcher? (Window message? File?)
+// - Should dropped player's inputs freeze or zero out?
+//
+// SIMPLE FIRST APPROACH:
+// When player drops:
+//   - Zero their inputs for future frames
+//   - Continue playing
+//   - Launcher can display UI about dropout
+//
+// IMPLEMENTATION:
+// Add to NetworkThreadManager:
+// public event Action<int>? OnPlayerDropped; // Player index
+//
+// In NetworkThreadLoop():
+// if (parseResult.MessageType == PLAYER_DISCONNECTED)
+// {
+//     OnPlayerDropped?.Invoke(playerIndex);
+// }
+//
+// In Program.cs:
+// networkManager.OnPlayerDropped += (playerIdx) =>
+// {
+//     Console.WriteLine($"🔴 Player {playerIdx} disconnected!");
+//     // Clear their inputs from ring buffer
+// };
+
+
+// ==============================================================================
+// PHASE 4F: TESTING CHECKLIST
+// ==============================================================================
+//
+// Before considering Phase 4 complete:
+//
+// □ Local test (2 cores on same machine):
+//   - Launcher starts core 1 (host)
+//   - Launcher starts core 2 (guest)
+//   - Core 2 reads config, finds core 1's address
+//   - Cores exchange a test packet
+//   - Console shows "✅ P2P connected"
+//
+// □ LAN test (2 cores on same network):
+//   - Same as above but on different PCs
+//   - Verify LAN routing is used (not WAN)
+//
+// □ Dropout test:
+//   - Kill core 1
+//   - Verify server detects after 3 seconds
+//   - Verify server notifies core 2
+//   - Verify core 2 console shows dropdown message
+//
+// □ Performance test:
+//   - Run frame loop 1000 frames
+//   - Verify no memory growth (zero allocation)
+//   - Check CPU usage
+//   - Verify timing stays at 60 FPS
+
+
+// ==============================================================================
+// PHASE 4 TIMELINE ESTIMATE
+// ==============================================================================
+//
+// 4A: Input Protocol Definition     → 30 min
+// 4B: PublishLocalInput()            → 1 hour
+// 4C: GetFrameInputs() + Ring fill   → 1 hour
+// 4D: Update Sync Engines            → 1-2 hours
+// 4E: Dropout Signal Handling        → 30 min
+// 4F: Testing & Debugging            → 2-3 hours
+//
+// TOTAL: ~6-8 hours development + testing
+
+
+// ==============================================================================
+// CODE COMMENTS GUIDELINES FOR PHASE 4
+// ==============================================================================
+//
+// When implementing Phase 4, maintain these principles:
+//
+// 1. SECTION HEADERS
+//    // --- SENDING INPUTS TO PEERS ---
+//    // --- RECEIVING INPUTS FROM PEERS ---
+//    Break code into logical chunks with clear headers
+//
+// 2. COMPLEXITY COMMENTS
+//    Comment WHY, not WHAT
+//    
+//    Bad:  x = y + z;  // Add y and z
+//    Good: x = y + z;  // Account for clock drift between peers
+//
+// 3. NON-OBVIOUS MATH
+//    Comment every bitwise operation, modulo, or indexing trick
+//    
+//    int bufferIndex = (int)(frameNumber & _ringBufferMask);
+//    // & 0xFF is fast modulo 256 (ring buffer wraparound)
+//    // faster than frameNumber % 256 on old CPUs
+//
+// 4. THREAD SAFETY
+//    Explain locking strategy at top of class
+//    Comment any shared mutable state
+//    
+//    // ⚠️ SHARED WITH FRAME THREAD
+//    // Frame thread reads _inputRingBuffer[index]
+//    // Network thread writes _inputRingBuffer[index]
+//    // No lock needed - uint read/write is atomic
+//
+// 5. ALLOCATION WARNINGS
+//    Flag anything that might allocate
+//    
+//    ⚠️ ALLOCATION: This creates a List every iteration!
+//    _peerEndpoints.Values.ToList();  // BAD
+//    
+//    ✅ USE INSTEAD:
+//    foreach (var peer in _peerEndpoints.Values)  // No allocation
+
+
+// ==============================================================================
+// NEXT ACTION
+// ==============================================================================
+//
+// 1. Read Packets/ClientInputPacket.cs
+// 2. Read Synchronization/HostSyncEngine.cs
+// 3. Read Synchronization/ClientSyncEngine.cs
+// 4. Write down answers to "QUESTIONS TO ANSWER" in 4A
+// 5. Start implementing 4A with detailed comments
+//
+// When ready for implementation, let me know and we'll tackle Phase 4!
+

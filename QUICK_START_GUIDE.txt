@@ -1,0 +1,451 @@
+// ============================================================================
+// RETRO NETPLAY CORE - QUICK START GUIDE
+// ============================================================================
+// Last Updated: After Phase 3 (Architecture Redesign)
+// 
+// This guide will help you understand the codebase structure and flow.
+// Read this first before diving into specific files.
+
+
+// ============================================================================
+// 1. BIG PICTURE: HOW DOES IT WORK?
+// ============================================================================
+//
+// RetroNetplayCore is a 4-player netplay system for Libretro emulator cores.
+// Think of it like online multiplayer for retro games.
+//
+// THE SEQUENCE:
+//
+// A. BEFORE GAME STARTS
+//    1. User launches RetroNetplayLauncher (the WPF app)
+//    2. User enters lobby server IP, selects "Host" or "Join"
+//    3. If Host: selects which core + ROM to play
+//    4. Launcher connects to server, gets room code and other players' addresses
+//    5. Launcher writes engine_config.json with all this info
+//    6. Launcher launches RetroNetplayCore.exe (the actual game)
+//
+// B. GAME STARTS
+//    1. RetroNetplayCore reads engine_config.json
+//    2. Core starts network manager (background thread)
+//    3. Core loads the libretro DLL and ROM
+//    4. Core enters main loop at 60 FPS
+//    5. Each frame:
+//       - Read local controller input
+//       - Send our input to all other cores (via network thread)
+//       - Receive inputs from other cores (from network thread)
+//       - Merge all inputs into synchronized frame
+//       - Run one frame of emulation
+//       - Repeat
+//    6. Network thread also sends heartbeat to server every 1 second
+//
+// C. DURING GAMEPLAY
+//    - If a player unplugs or network dies
+//    - Server detects missing heartbeat after 3 seconds
+//    - Server tells remaining players "Player X disconnected"
+//    - Remaining players can pause/quit or continue
+//
+// D. AFTER GAME ENDS
+//    - Core closes
+//    - Launcher window reappears
+//    - User can start another session
+
+
+// ============================================================================
+// 2. FOLDER STRUCTURE
+// ============================================================================
+//
+// RetroNetplayCore/
+// ├── netplay-server/
+// │   └── server-cloud/
+// │       ├── server.js           ← Matchmaking server (Node.js)
+// │       └── package.json
+// │
+// ├── RetroNetplayLauncher/        ← The WPF UI that users interact with
+// │   ├── App.xaml.cs
+// │   ├── MainWindow.xaml.cs       ← UI event handlers (Host/Join buttons)
+// │   ├── ConfigWriter.cs          ← Writes engine_config.json
+// │   ├── SessionManager.cs        ← Launches RetroNetplayCore.exe
+// │   ├── CoreScanner.cs           ← Finds available .dlls in Emulators/ folder
+// │   ├── MatchmakerClient/
+// │   │   ├── MatchmakerClientBase.cs   ← Base class for networking
+// │   │   ├── MatchmakerHostClient.cs   ← Host role (creates lobby)
+// │   │   └── MatchmakerGuestClient.cs  ← Guest role (joins lobby)
+// │   └── RetroNetplayLauncher.csproj
+// │
+// └── RetroNetplayCore/            ← The actual netplay engine
+//     ├── Program.cs               ← Main entry point, frame loop
+//     ├── Configuration/
+//     │   └── EngineConfig.cs      ← Loads engine_config.json
+//     ├── Emulator/
+//     │   ├── EmulatorManager.cs   ← Loads libretro DLLs, runs frames
+//     │   ├── LibretroBridge.cs    ← Native code interface to libretro
+//     │   ├── RomLoader.cs         ← Loads ROM files
+//     │   └── [Audio/Video pipelines...]
+//     ├── Synchronization/
+//     │   ├── NetworkThreadManager.cs   ← BACKGROUND THREAD (network I/O)
+//     │   ├── HostSyncEngine.cs         ← Frame synchronization
+//     │   └── ClientSyncEngine.cs
+//     ├── Input/
+//     │   └── InputManager.cs      ← Reads Xbox controller
+//     ├── Packets/
+//     │   ├── ClientInputPacket.cs ← One player's input (buttons, sticks)
+//     │   ├── HostFramePacket.cs   ← All 4 players' inputs merged
+//     │   └── [Other structures...]
+//     └── RetroNetplayCore.csproj
+
+
+// ============================================================================
+// 3. KEY CONCEPTS TO UNDERSTAND
+// ============================================================================
+//
+// A. ZERO ALLOCATION REQUIREMENT
+//    "The frame loop must NEVER allocate memory"
+//    
+//    WHY? Because garbage collection pauses (even 1ms) will break 60 FPS sync
+//    
+//    CONSEQUENCE: Pre-allocate everything at startup:
+//    - Ring buffers for inputs
+//    - Socket buffers
+//    - Peer endpoint maps
+//    
+//    RULE: If you're in Program.cs main loop, never use:
+//    ✅ OK:   new HostFramePacket()         (struct, stack allocation)
+//    ✅ OK:   array[index]                   (no allocation)
+//    ✅ OK:   method calls (if no allocation inside)
+//    
+//    ❌ BAD:  new List<T>()                  (heap allocation)
+//    ❌ BAD:  JsonSerializer.Serialize()     (allocates strings)
+//    ❌ BAD:  Regex.Match()                  (allocates)
+//
+// B. RING BUFFERS
+//    "A circular buffer that overwrites old data"
+//    
+//    Used for: Pre-allocated inputs from peers
+//    Size: 256 frames (at 60 FPS = 4 seconds of history)
+//    Index: frameNumber & 0xFF (fast modulo 256)
+//    
+//    When frame 0 arrives: Store in buffer[0]
+//    When frame 256 arrives: Store in buffer[0]  ← Overwrites old frame 0
+//    
+//    Safe because: Frame 0 is 256 frames old, we're on frame 256+
+//    So old data is never read after being overwritten
+//
+// C. MESH P2P
+//    "Every core sends its input directly to every other core"
+//    
+//    Core 1 sends to: Core 2, 3, 4
+//    Core 2 sends to: Core 1, 3, 4
+//    Core 3 sends to: Core 1, 2, 4
+//    Core 4 sends to: Core 1, 2, 3
+//    
+//    Advantage: Lower latency (direct connection)
+//               More resilient (doesn't depend on one hub)
+//    
+//    Disadvantage: More bandwidth (but input data is tiny)
+//
+// D. BACKGROUND NETWORK THREAD
+//    "Network I/O happens off the frame loop"
+//    
+//    Main thread (60 FPS):
+//    - Reads pre-buffered inputs
+//    - Runs emulation
+//    - Publishes local input (non-blocking queue)
+//    
+//    Background thread:
+//    - Sends/receives UDP packets
+//    - Fills ring buffers
+//    - Sends heartbeat to server
+//    - Handles dropdown signals
+//
+// E. SERVER COORDINATION
+//    "Server doesn't relay frames, just coordinates"
+//    
+//    Server's jobs:
+//    1. Create lobby, assign room code
+//    2. Tell players who else is there (IP, port)
+//    3. Monitor heartbeats
+//    4. Detect dropouts
+//    5. Tell remaining players "X disconnected"
+//    
+//    Server does NOT:
+//    ❌ See game frames
+//    ❌ Relay inputs (direct P2P)
+//    ❌ Arbitrate gameplay
+//
+// F. DETERMINISTIC NETPLAY
+//    "Same inputs always produce same outputs"
+//    
+//    Key rule: If all players run frame N with same inputs,
+//              they MUST produce identical game state
+//    
+//    Why? Because if one player's game differs, we can't
+//    sync them back together
+//    
+//    Implications:
+//    - Input must be synchronized EXACTLY
+//    - No RNG (random number generation)
+//    - No time-dependent logic (unless we share DateTime)
+//    - No async operations in emulator
+//
+// G. INPUT SYNCHRONIZATION
+//    "All players must run the same frame at the same time"
+//    
+//    Current approach (simple):
+//    - Wait until we receive input from all players
+//    - Run frame
+//    
+//    Advanced approach (lookahead):
+//    - Run frame if we have input OR timeout expires
+//    - If timeout, assume remote player pressed nothing
+//    
+//    Your current code doesn't have lookahead yet (Phase 4B)
+
+
+// ============================================================================
+// 4. EXECUTION FLOW
+// ============================================================================
+//
+// LAUNCHER STARTUP:
+//
+// MainWindow_Loaded()
+//   ├─ Load AppConfig (server IP memory)
+//   ├─ Scan for available cores (EmulatorComboBox)
+//   └─ Show UI
+//
+// User clicks "Host"
+//   └─ HostFinalBtn_Click()
+//       ├─ Connect to server (MatchmakerHostClient.HostSessionAsync)
+//       ├─ Get room code and show in UI
+//       └─ Wait for players to join (OnLobbyUpdated events)
+//
+// User clicks "Start Game"
+//   └─ StartGameBtn_Click()
+//       └─ MatchmakerHostClient.SignalStartGameAsync()
+//
+// Server broadcasts GAME_STARTING
+//   └─ Matchmaker_OnGameStarting()  (MainWindow.xaml.cs)
+//       ├─ Hole punch (UDP punch to open NAT)
+//       ├─ ConfigWriter.WriteLaunchConfig()
+//       │   └─ Creates engine_config.json
+//       ├─ SessionManager.BootUnmanagedCore()
+//       │   └─ Launches RetroNetplayCore.exe
+//       └─ Application.Current.Shutdown()  (close launcher)
+//
+//
+// CORE STARTUP (RetroNetplayCore.exe):
+//
+// Program.Main()
+//   ├─ EngineConfig.Load("engine_config.json")
+//   │   └─ Reads server address, room code, peer list
+//   ├─ InputManager()
+//   │   └─ Initialize Xbox controller reading
+//   ├─ NetworkThreadManager.Start()
+//   │   ├─ Create P2P socket, bind to LocalPort
+//   │   ├─ Build peer endpoint map
+//   │   └─ Spawn background network thread
+//   ├─ EmulatorManager.Start()
+//   │   ├─ Load libretro DLL (snes9x, etc.)
+//   │   └─ Load ROM file
+//   └─ Main game loop (60 FPS):
+//       └─ while(true):
+//           ├─ Capture local controller input
+//           ├─ Get merged inputs from NetworkThreadManager
+//           ├─ Publish our input (non-blocking queue)
+//           ├─ Run one frame of emulation
+//           └─ Next frame
+
+
+// ============================================================================
+// 5. THREAD ARCHITECTURE
+// ============================================================================
+//
+// Main Thread (UI/Game)
+// │
+// ├─ RetroNetplayLauncher.exe        ← 1 thread (WPF UI)
+// │
+// └─ RetroNetplayCore.exe            ← 2+ threads
+//    ├─ Main Thread (Program.Main)   ← 60 FPS frame loop, NO allocation
+//    │  Uses:
+//    │  - InputManager (reads controller)
+//    │  - EmulatorManager (runs emulation)
+//    │  - NetworkThreadManager.GetFrameInputs()
+//    │  - NetworkThreadManager.PublishLocalInput()
+//    │
+//    └─ NetworkThread                ← Background, runs NetworkThreadManager
+//       Uses:
+//       - P2P socket (UDP to peers)
+//       - Server socket (UDP to matchmaker)
+//       - Ring buffer (write inputs)
+//       - Outgoing queue (read published inputs)
+//
+// SYNCHRONIZATION:
+// - Ring buffer: Thread-safe (single reader, single writer, no locks)
+// - Outgoing queue: Could use lock-free queue or simple lock
+// - Everything else: Local to each thread
+
+
+// ============================================================================
+// 6. KEY FILES TO READ FIRST
+// ============================================================================
+//
+// START WITH THESE (easiest to understand):
+// 1. Configuration/EngineConfig.cs          ← Data structures
+// 2. Program.cs                             ← Main frame loop logic
+// 3. Packets/ClientInputPacket.cs          ← Input structure
+// 4. Packets/HostFramePacket.cs            ← Frame state structure
+//
+// THEN READ THESE:
+// 5. Synchronization/NetworkThreadManager.cs ← Background thread
+// 6. RetroNetplayLauncher/ConfigWriter.cs    ← Config file generation
+// 7. netplay-server/server.js                ← Server logic
+//
+// HARD STUFF (read when needed):
+// 8. Emulator/EmulatorManager.cs            ← Libretro bridge
+// 9. Synchronization/HostSyncEngine.cs      ← Frame sync (needs update)
+
+
+// ============================================================================
+// 7. COMMON QUESTIONS
+// ============================================================================
+//
+// Q: Why is there no input protocol defined yet?
+// A: That's Phase 4A. For now, the protocol is "TODO"
+//
+// Q: Can I test this without network?
+// A: Yes! Set all peer IPs to 127.0.0.1 and run on same PC
+//
+// Q: What happens if input is missing for a frame?
+// A: Currently: undefined (Phase 4B/C issue)
+//    Solution: Use last-known input or zero input
+//
+// Q: Can I run 4 cores on one PC?
+// A: Yes, but each needs different LocalPort
+//    You'd need to modify config manually (launcher only does 2-player for now)
+//
+// Q: Why does the server use UDP instead of TCP?
+// A: UDP is simpler, allows hole-punching, lower latency
+//    Tradeoff: May lose packets (but that's OK for heartbeat)
+//
+// Q: Why not use existing netplay libraries?
+// A: This is for learning! Building from scratch teaches you the challenges
+//
+// Q: Can I add relay mode if P2P fails?
+// A: Yes! That's future work (server can relay inputs if needed)
+
+
+// ============================================================================
+// 8. DEBUGGING TIPS
+// ============================================================================
+//
+// CONSOLE OUTPUT:
+// Core prints emojis and status messages:
+//   ✅ = Success
+//   ⚠️ = Warning
+//   ❌ = Error
+//   📥 = Config loaded
+//   🌐 = Network event
+//   💓 = Heartbeat
+//   🔴 = Player dropped
+//   🎮 = Game event
+//
+// WHAT TO CHECK:
+// 1. Is engine_config.json being created?
+//    Look for file in core's working directory
+//
+// 2. Can core read the config?
+//    Check console for "📥 Settings successfully loaded"
+//
+// 3. Does network thread start?
+//    Look for "✅ Network thread started"
+//
+// 4. Can cores find each other?
+//    Manual test: Run netstat, see if P2P socket is listening
+//
+// 5. Are heartbeats being sent?
+//    Watch server logs for HEARTBEAT commands
+//
+// 6. What happens on disconnect?
+//    Server should log "[Dropout] Player X..." after 3 seconds
+
+
+// ============================================================================
+// 9. NEXT STEPS FOR YOU
+// ============================================================================
+//
+// IMMEDIATE:
+// 1. Read this guide completely
+// 2. Open EngineConfig.cs and understand the structure
+// 3. Open Program.cs and trace through the frame loop
+// 4. Read PHASE_4_PLANNING.txt to understand what's missing
+//
+// SHORT TERM (Phase 4):
+// 1. Define input protocol format
+// 2. Implement PublishLocalInput()
+// 3. Implement GetFrameInputs() with ring buffer fill
+// 4. Update sync engines
+// 5. Test locally with 2 cores
+//
+// MEDIUM TERM:
+// 1. Test on LAN with 2 PCs
+// 2. Test dropout detection
+// 3. Add error recovery
+// 4. Optimize bandwidth
+//
+// LONG TERM:
+// 1. Support 3-4 players
+// 2. Add relay mode (NAT traversal)
+// 3. Add STUN/TURN
+// 4. UI improvements in launcher
+// 5. Record replays
+
+
+// ============================================================================
+// 10. FILE DEPENDENCY GRAPH
+// ============================================================================
+//
+// RetroNetplayCore.exe
+// └── Program.cs
+//     ├── EngineConfig.cs           (loads engine_config.json)
+//     ├── InputManager.cs           (reads controller)
+//     ├── NetworkThreadManager.cs   (network I/O, ring buffer)
+//     ├── EmulatorManager.cs        (libretro interface)
+//     │   ├── LibretroBridge.cs     (native DLL calls)
+//     │   ├── RomLoader.cs          (ROM file parsing)
+//     │   └── [Audio/Video pipelines]
+//     ├── HostSyncEngine.cs         (frame sync)
+//     └── ClientSyncEngine.cs       (frame sync)
+//
+// engine_config.json (created by launcher)
+// └── ConfigWriter.cs
+//     └── MatchmakerClientBase.cs   (gets peer info from server)
+//
+// netplay-server/server.js          (Node.js, separate process)
+// └── Coordination protocol (UDP messages)
+
+
+// ============================================================================
+// FINAL TIPS
+// ============================================================================
+//
+// 1. ALWAYS keep allocation in mind
+//    Every line of code in Program.Main loop will run 60 times per second
+//    Total budget: 16ms per frame, with overhead
+//
+// 2. COMMENT YOUR ASSUMPTIONS
+//    When you implement Phase 4, explain WHY you made certain choices
+//    Future-you will thank present-you
+//
+// 3. TEST INCREMENTALLY
+//    Don't implement all of Phase 4 then test
+//    After each section, test that specific part
+//
+// 4. USE CONSOLE OUTPUT
+//    Errors printed to console are your best debugging friend
+//    Add logging everywhere
+//
+// 5. VERSION YOUR CONFIG
+//    When you change engine_config.json format, update the version number
+//    So old launchers don't break new cores
+//
+// Good luck! You've got this! 🚀
+

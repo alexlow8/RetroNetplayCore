@@ -94,16 +94,21 @@ namespace RetroNetplayLauncher
                     romPath = _matchmaker.TargetRomPath;
                 }
 
-                // 3. Extract the socket handle safely, stopping all background client activities
-                Socket dynamicHandoverSocket = _matchmaker.ArrearsAndExtractSocket();
+                // 3. Save deployment properties setup details straight into config files
+                ConfigWriter.WriteLaunchConfig(
+                    _matchmaker,
+                    rosterSnapshot,
+                    selectedCore,
+                    romPath,
+                    _matchmaker.ServerAddress,
+                    _matchmaker.ServerPortNumber,
+                    _matchmaker.RoomCode
+                );
 
-                // 4. Save deployment properties setup details straight into config files
-                ConfigWriter.WriteLaunchConfig(_matchmaker, rosterSnapshot, selectedCore, romPath);
+                // 4. Launch the core application (server connection remains alive in the core)
+                SessionManager.BootUnmanagedCore();
 
-                // 5. Duplicate the live socket kernel handle descriptor straight into the engine process space
-                SessionManager.BootUnmanagedCore(dynamicHandoverSocket);
-
-                // 6. Shutdown the WPF launcher program context window environment safely
+                // 5. Shutdown the WPF launcher program context window environment safely
                 await Application.Current.Dispatcher.InvokeAsync(() => Application.Current.Shutdown());
             });
         }

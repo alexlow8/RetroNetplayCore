@@ -25,6 +25,9 @@ namespace RetroNetplayLauncher.MatchmakerClient
         public abstract bool IsHost { get; }
         public string TargetCoreName { get; protected set; } = "MockLibretroCore.dll";
         public string TargetRomPath { get; protected set; } = "";
+        public string RoomCode => ActiveRoomCode;
+        public string ServerAddress => ServerIP;
+        public int ServerPortNumber => ServerPort;
 
         public event Action<LobbyUpdateMessage>? OnLobbyUpdated;
         public event Action? OnGameStarting;
@@ -33,7 +36,7 @@ namespace RetroNetplayLauncher.MatchmakerClient
         {
             ServerIP = serverIpAddress;
 
-            Socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            Socket = SessionManager.CreateInheritableUdpSocket();
             Socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             Socket.Bind(new IPEndPoint(IPAddress.Any, 0));
 

@@ -1,0 +1,507 @@
+/*
+╔════════════════════════════════════════════════════════════════════════════╗
+║                     RETRO NETPLAY CORE ARCHITECTURE                        ║
+║                              Phase 3 Complete                              ║
+╚════════════════════════════════════════════════════════════════════════════╝
+*/
+
+// ============================================================================
+// SYSTEM OVERVIEW
+// ============================================================================
+//
+// Three separate processes work together:
+//   1. Netplay Server (Node.js) - Central coordination
+//   2. RetroNetplayLauncher (C#/WPF) - User interface
+//   3. RetroNetplayCore (C#) - Emulation engine (one per player)
+//
+//     ┌─────────────────────────────────────────────────────────────────┐
+//     │                                                                   │
+//     │                 🌐 NETPLAY SERVER (Node.js)                      │
+//     │                      PORT 5005 (UDP)                             │
+//     │                                                                   │
+//     │  Responsibilities:                                               │
+//     │  • Create lobbies                                                │
+//     │  • Track player endpoints                                        │
+//     │  • Monitor heartbeats (3 second timeout)                         │
+//     │  • Detect dropouts                                               │
+//     │  • Broadcast PLAYER_DISCONNECTED events                          │
+//     │                                                                   │
+//     │  DOES NOT:                                                       │
+//     │  ✗ Relay game frames                                             │
+//     │  ✗ Arbitrate gameplay                                            │
+//     │  ✗ Know game state                                               │
+//     │                                                                   │
+//     └─────────────────┬──────────────────┬──────────────────┬──────────┘
+//                       │                  │                  │
+//                   UDP │                  │ UDP              │ UDP
+//               Messages │                  │ Messages         │ Messages
+//                       │                  │                  │
+//     ┌─────────────────▼──┐    ┌──────────▼─────────┐    ┌───▼──────────────┐
+//     │                    │    │                    │    │                  │
+//     │   🎮 LAUNCHER      │    │  🎮 CORE (Player 1)│    │ 🎮 CORE (Player 2)
+//     │   (WPF)            │    │  (Host)            │    │ (Guest)          │
+//     │                    │    │                    │    │                  │
+//     │ ┌────────────────┐ │    │ ┌──────────────┐   │    │ ┌──────────────┐ │
+//     │ │ 1. Connect to  │ │    │ │ 1. Read      │   │    │ │ 1. Read      │ │
+//     │ │    lobby       │ │    │ │    config    │   │    │ │    config    │ │
+//     │ │                │ │    │ │ 2. Create P2P│   │    │ │ 2. Create P2P│ │
+//     │ │ 2. Get room    │ │    │ │    socket    │   │    │ │    socket    │ │
+//     │ │    code        │ │    │ │ 3. Load      │   │    │ │ 3. Load      │ │
+//     │ │                │ │    │ │    emulator  │   │    │ │    emulator  │ │
+//     │ │ 3. Write       │ │    │ │ 4. Start     │   │    │ │ 4. Start     │ │
+//     │ │    config      │ │    │ │    network   │   │    │ │    network   │ │
+//     │ │                │ │    │ │    thread    │   │    │ │    thread    │ │
+//     │ │ 4. Launch      │ │    │ │ 5. Enter     │   │    │ │ 5. Enter     │ │
+//     │ │    core.exe    │ │    │ │    60 FPS    │   │    │ │    60 FPS    │ │
+//     │ │                │ │    │ │    loop      │   │    │ │    loop      │ │
+//     │ │ 5. Close       │ │    │ │              │   │    │ │              │ │
+//     │ └────────────────┘ │    │ └──────────────┘   │    │ └──────────────┘ │
+//     │                    │    │                    │    │                  │
+//     │ Outputs:           │    │ Inputs:            │    │ Inputs:          │
+//     │ • engine_config    │    │ • Xbox Controller  │    │ • Xbox Controller│
+//     │   .json            │    │ • Peer Inputs      │    │ • Peer Inputs    │
+//     │                    │    │ • Server Events    │    │ • Server Events  │
+//     └────────────────────┘    └────────────────────┘    └──────────────────┘
+//
+//        ▼ Writes config file     ▲ ▼ P2P Direct UDP     ▲ ▼ P2P Direct UDP
+//                                   │  (Mesh Networking)   │  (Mesh Networking)
+//                                   │  Low latency         │  Low latency
+//                                   └───────────────────────┘
+
+
+// ============================================================================
+// FILE STRUCTURE
+// ============================================================================
+
+/*
+RetroNetplayCore/                    ← Main Solution
+│
+├── netplay-server/
+│   └── server-cloud/
+│       ├── server.js                ← UDP lobby server (Node.js)
+│       └── package.json
+│
+├── RetroNetplayLauncher/            ← Launcher GUI
+│   ├── App.xaml.cs                  ← WPF Application
+│   ├── MainWindow.xaml.cs           ← UI event handlers
+│   │   └─ HostFinalBtn_Click()      ← Creates lobby
+│   │   └─ StartGameBtn_Click()      ← Starts game
+│   │   └─ Matchmaker_OnGameStarting()  ← Launches core
+│   │
+│   ├── ConfigWriter.cs              ← Writes engine_config.json
+│   │   └─ WriteLaunchConfig()       ← NEW: Peer roster format
+│   │
+│   ├── SessionManager.cs            ← Launches core.exe
+│   │   └─ BootUnmanagedCore()       ← CHANGED: No socket
+│   │
+│   ├── CoreScanner.cs               ← Finds available cores
+│   ├── AppConfig.cs                 ← User preferences
+│   │
+│   └── MatchmakerClient/
+│       ├── MatchmakerClientBase.cs  ← Base networking
+│       │   └─ NEW: RoomCode property
+│       │   └─ NEW: ServerAddress property
+│       ├── MatchmakerHostClient.cs  ← Host role
+│       └── MatchmakerGuestClient.cs ← Guest role
+│
+└── RetroNetplayCore/                ← Core Engine
+	│
+	├── Program.cs                   ← Entry point (REWRITTEN)
+	│   └─ Main()
+	│       ├─ Load EngineConfig
+	│       ├─ Start NetworkThreadManager
+	│       ├─ Load emulator
+	│       └─ 60 FPS frame loop (NO allocation)
+	│
+	├── Configuration/
+	│   └── EngineConfig.cs          ← REWRITTEN: New schema
+	│       ├─ PeerInfo (NEW)        ← Peer address info
+	│       ├─ Peers[]: List          ← NEW: All players
+	│       ├─ ServerAddress          ← NEW: Heartbeat target
+	│       ├─ ServerPort             ← NEW: Heartbeat target
+	│       └─ RoomCode               ← NEW: Session ID
+	│
+	├── Emulator/
+	│   ├── EmulatorManager.cs       ← Loads libretro DLLs
+	│   │   └─ Start()               ← Loads core + ROM
+	│   │   └─ UpdateFrameStates()   ← Run one frame
+	│   │
+	│   ├── LibretroBridge.cs        ← Native interop
+	│   │   └─ LoadCoreLibrary()
+	│   │   └─ LoadGame()
+	│   │   └─ RunFrame()
+	│   │
+	│   ├── RomLoader.cs             ← ROM file parsing
+	│   ├── VideoPipeline.cs         ← Render callbacks
+	│   ├── AudioPipeline.cs         ← Audio callbacks
+	│   └── [Others...]
+	│
+	├── Input/
+	│   └── InputManager.cs          ← Xbox controller
+	│       └─ CaptureFrame()        ← Poll controller
+	│
+	├── Synchronization/
+	│   ├── NetworkThreadManager.cs  ← NEW FILE (350+ lines)
+	│   │   ├─ Start()               ← Spawn thread
+	│   │   ├─ GetFrameInputs()      ← Read ring buffer
+	│   │   ├─ PublishLocalInput()   ← Queue send (TODO)
+	│   │   ├─ NetworkThreadLoop()   ← Background work
+	│   │   ├─ ReceiveP2PMessages()  ← Receive inputs (TODO)
+	│   │   ├─ SendServerHeartbeat() ← Keep server alive
+	│   │   └─ BuildPeerEndpoints()  ← Route LAN/WAN
+	│   │
+	│   ├── HostSyncEngine.cs        ← Frame sync (needs update)
+	│   │   └─ ProcessFrameSync()    ← Merge inputs (TODO)
+	│   │
+	│   └── ClientSyncEngine.cs      ← Frame sync (needs update)
+	│       └─ ProcessFrameSync()    ← Merge inputs (TODO)
+	│
+	├── Packets/
+	│   ├── ClientInputPacket.cs     ← One player's input
+	│   │   ├─ Buttons: ushort       ← Button state bitmask
+	│   │   ├─ LeftStickX: short     ← Stick position
+	│   │   ├─ Triggers: byte        ← L/R trigger 0-255
+	│   │   └─ [Frame sync struct]
+	│   │
+	│   ├── HostFramePacket.cs       ← All 4 players merged
+	│   │   ├─ Player0: PlayerInputState
+	│   │   ├─ Player1: PlayerInputState
+	│   │   ├─ Player2: PlayerInputState
+	│   │   └─ Player3: PlayerInputState
+	│   │
+	│   └── [Other packet types...]
+	│
+	└── RetroNetplayCore.csproj      ← C# Project file
+*/
+
+
+// ============================================================================
+// DATA FLOW: STARTUP
+// ============================================================================
+
+/*
+USER LAUNCHES LAUNCHER
+   │
+   ▼
+RetroNetplayLauncher starts
+   │
+   ├─ Read AppConfig (server IP)
+   ├─ Scan for available cores
+   └─ Show UI
+
+USER CLICKS "HOST"
+   │
+   ▼
+HostFinalBtn_Click()
+   │
+   ├─ Create MatchmakerHostClient
+   │  │
+   │  └─ Connect to 192.168.1.100:5005
+   │
+   ├─ HostSessionAsync()
+   │  │
+   │  ├─ Send: { command: "HOST", maxPlayers: 2, coreName: "snes9x.dll" }
+   │  │
+   │  └─ Receive: { status: "ROOM_CREATED", code: "1234" }
+   │
+   ├─ Show room code in UI
+   └─ Start listening for LOBBY_UPDATE
+
+ANOTHER PLAYER CLICKS "JOIN"
+   │
+   ▼
+Server receives JOIN, broadcasts LOBBY_UPDATE to both players
+
+USER CLICKS "START GAME"
+   │
+   ▼
+StartGameBtn_Click()
+   │
+   ├─ MatchmakerHostClient.SignalStartGameAsync()
+   │  │
+   │  └─ Send: { command: "START_GAME", code: "1234" }
+   │
+   ├─ Server receives START_GAME
+   │  │
+   │  ├─ Transitions room to GAMEPLAY phase
+   │  │  (keeps room alive now, doesn't delete)
+   │  │
+   │  └─ Broadcasts: { status: "GAME_STARTING", coreName: "...", romPath: "..." }
+   │
+   ├─ Matchmaker_OnGameStarting() triggered
+   │  │
+   │  ├─ ConfigWriter.WriteLaunchConfig()
+   │  │  │
+   │  │  ├─ Read cached peer roster from LOBBY_UPDATE
+   │  │  │
+   │  │  ├─ Smart routing (LAN vs WAN):
+   │  │  │  ├─ If peer.WanIp == myWanIp → use peer.LanIp
+   │  │  │  └─ Else → use peer.WanIp
+   │  │  │
+   │  │  └─ Write engine_config.json:
+   │  │     {
+   │  │       "IsHost": true,
+   │  │       "LocalPort": 54321,
+   │  │       "CorePath": "Emulators/snes9x.dll",
+   │  │       "RomPath": "mario.smc",
+   │  │       "RoomCode": "1234",
+   │  │       "ServerAddress": "192.168.1.100",
+   │  │       "ServerPort": 5005,
+   │  │       "Peers": [
+   │  │         { PlayerIndex: 0, LanIp: "192.168.1.1", LanPort: 50000, ... },
+   │  │         { PlayerIndex: 1, LanIp: "192.168.1.2", LanPort: 50001, ... }
+   │  │       ]
+   │  │     }
+   │  │
+   │  ├─ SessionManager.BootUnmanagedCore()
+   │  │  │
+   │  │  └─ CreateProcess("RetroNetplayCore.exe")
+   │  │     (No command-line arguments anymore!)
+   │  │
+   │  └─ Application.Current.Shutdown()
+   │
+   ▼
+LAUNCHER CLOSES
+
+
+// ============================================================================
+// DATA FLOW: RUNTIME (60 FPS Game Loop)
+// ============================================================================
+
+RetroNetplayCore.exe starts
+   │
+   ├─ Program.Main()
+   │
+   ├─ EngineConfig.Load("engine_config.json")
+   │  │
+   │  └─ Parse peers, server address, room code
+   │
+   ├─ InputManager()
+   │  └─ Initialize Xbox controller
+   │
+   ├─ NetworkThreadManager.Start()
+   │  │
+   │  ├─ Create UDP socket, bind to :50000
+   │  │
+   │  ├─ BuildPeerEndpoints()
+   │  │  ├─ Player 1: 192.168.1.2:50001
+   │  │  └─ [Mesh routing: will send to this address]
+   │  │
+   │  ├─ Create background thread (Priority: AboveNormal)
+   │  │
+   │  └─ Thread runs NetworkThreadLoop():
+   │     │
+   │     └─ while (true):
+   │        │
+   │        ├─ ReceiveP2PMessages()     [TO IMPLEMENT]
+   │        │  ├─ Check if packets arrived from peers
+   │        │  └─ Deserialize into ring buffer
+   │        │
+   │        ├─ SendQueuedInputs()        [TO IMPLEMENT]
+   │        │  ├─ Pop from outgoing queue
+   │        │  ├─ Serialize input packet
+   │        │  └─ Send to all peers (mesh)
+   │        │
+   │        ├─ SendServerHeartbeat()
+   │        │  └─ Every 1 second: Send HEARTBEAT to 192.168.1.100:5005
+   │        │
+   │        └─ Thread.Sleep(10ms)
+   │
+   ├─ EmulatorManager.Start()
+   │  ├─ Load libretro DLL
+   │  └─ Load ROM file
+   │
+   └─ MAIN FRAME LOOP (60 FPS, NO ALLOCATION):
+	  │
+	  └─ while (true):
+		 │
+		 ├─ Wait until next frame time (every 16.67ms)
+		 │
+		 ├─ ClientInputPacket localInput = input.CaptureFrame()
+		 │  └─ Read Xbox controller (non-blocking)
+		 │
+		 ├─ networkManager.PublishLocalInput(frameNum, localInput)
+		 │  └─ Queue for background thread (non-blocking)
+		 │
+		 ├─ HostFramePacket masterFrame = networkManager.GetFrameInputs(frameNum)
+		 │  └─ Read from pre-filled ring buffer (no network wait!)
+		 │
+		 ├─ emulator.UpdateFrameStates(masterFrame)
+		 │  └─ Run one frame with all 4 players' inputs
+		 │
+		 └─ Next iteration
+
+
+// ============================================================================
+// RING BUFFER LIFECYCLE
+// ============================================================================
+
+/*
+Ring buffer is a circular array: [0][1][2]...[255]
+Allocate once at startup, reuse forever.
+
+Frame 0 arrives from network:
+  store_at = 0 & 0xFF = 0
+  _inputRingBuffer[0] = frame0_data
+
+Frame 1 arrives:
+  store_at = 1 & 0xFF = 1
+  _inputRingBuffer[1] = frame1_data
+
+...many frames...
+
+Frame 256 arrives (wraparound!):
+  store_at = 256 & 0xFF = 0
+  _inputRingBuffer[0] = frame256_data  ← Overwrites frame 0's data
+
+This is OK because:
+  - Frame loop is at frame 256
+  - Frame 0 is ancient history (256 frames ago = 4+ seconds ago)
+  - Frame 0 data will never be read again
+
+SIZE: 256 slots × sizeof(HostFramePacket) ≈ 13 KB
+ALLOCATION: One-time at startup, then reused forever
+*/
+
+
+// ============================================================================
+// THREAD ARCHITECTURE
+// ============================================================================
+
+/*
+RetroNetplayCore has TWO threads:
+
+THREAD 1: MAIN (60 FPS Frame Loop)
+├─ Responsibility: Run emulation at precise 60 FPS
+├─ Allocation: ZERO (all pre-allocated)
+├─ Runs: Input capture → sync → emulation
+├─ Waits on: Nothing (non-blocking)
+└─ Calls:
+   ├─ InputManager.CaptureFrame()
+   ├─ NetworkThreadManager.PublishLocalInput() [non-blocking queue]
+   ├─ NetworkThreadManager.GetFrameInputs() [read pre-filled buffer]
+   └─ EmulatorManager.UpdateFrameStates()
+
+THREAD 2: NETWORK (Background)
+├─ Responsibility: Handle all network I/O
+├─ Allocation: Allowed (not frame-critical)
+├─ Runs: Receive → deserialize → store
+├─ Runs: Serialize → send
+├─ Runs: Monitor heartbeat timing
+├─ Waits on: Socket receive (with timeout)
+└─ Calls:
+   ├─ Socket.ReceiveFrom()
+   ├─ Socket.SendTo()
+   ├─ JsonSerializer (for server msgs)
+   └─ WriteToRingBuffer()
+
+SYNCHRONIZATION:
+├─ Ring buffer: Thread-safe (single reader, single writer, atomic ops)
+├─ Outgoing queue: May use lock or lock-free queue
+├─ No locks on frame-critical path
+└─ CancellationToken to shut down cleanly
+*/
+
+
+// ============================================================================
+// MESSAGE TYPES
+// ============================================================================
+
+/*
+LAUNCHER → SERVER (UDP)
+├─ { command: "HOST", maxPlayers: 2, coreName: "...", internalIp: "...", internalPort: 54321 }
+├─ { command: "JOIN", code: "1234", internalIp: "...", internalPort: 54321 }
+├─ { command: "PING", code: "1234" }
+└─ { command: "START_GAME", code: "1234" }
+
+SERVER → LAUNCHER (UDP)
+├─ { status: "ROOM_CREATED", code: "1234" }
+├─ { status: "PONG" }
+├─ { status: "LOBBY_UPDATE", playerIndex: 0, coreName: "...", romPath: "...", peers: [...] }
+└─ { status: "GAME_STARTING", coreName: "...", romPath: "..." }
+
+CORE → SERVER (UDP) [NEW]
+├─ { command: "HEARTBEAT", code: "1234", playerIndex: 0 }  [every 1 second]
+
+SERVER → CORE (UDP) [NEW]
+├─ { status: "HEARTBEAT_ACK" }
+├─ { status: "PLAYER_DISCONNECTED", playerIndex: 1, remainingPlayers: 1 }
+
+CORE → CORE (UDP) [TO IMPLEMENT]
+├─ { type: 0x01, frameNumber: 1000, playerIndex: 0, input: {...} }
+└─ [Binary format, low overhead]
+*/
+
+
+// ============================================================================
+// NEXT PHASE: WHAT'S MISSING
+// ============================================================================
+
+/*
+Phase 4A: Input Protocol
+─ Define binary format for core-to-core messages
+─ Decide on frame buffering strategy
+─ Plan CRC/error checking
+
+Phase 4B: PublishLocalInput()
+─ Implement outgoing input queue
+─ Serialize input to binary
+─ Send to all peers (mesh)
+
+Phase 4C: ReceiveP2PMessages()
+─ Deserialize incoming packets
+─ Check frame number
+─ Populate ring buffer
+
+Phase 4D: Sync Engines
+─ Update HostSyncEngine
+─ Update ClientSyncEngine
+─ Remove old NetworkLink references
+
+Phase 4E: Dropout Handling
+─ Listen for PLAYER_DISCONNECTED
+─ Zero inputs for dropped player
+─ Or pause game
+
+Phase 4F: Testing
+─ 2-core local test
+─ 2-PC LAN test
+─ Dropout simulation
+─ Performance profiling
+*/
+
+
+// ============================================================================
+// PERFORMANCE TARGETS
+// ============================================================================
+
+/*
+FRAME LOOP:
+├─ FPS: 60 (target)
+├─ Frame time budget: 16.67 ms
+├─ Time per frame: ~15 ms available (1.67 ms margin for OS)
+├─ GC pauses: 0 (zero allocation!)
+└─ Consistency: ± 0.5 ms variance acceptable
+
+NETWORK THREAD:
+├─ Heartbeat interval: 1000 ms
+├─ Heartbeat timeout: 3000 ms (server side)
+├─ P2P packet rate: ~60/sec (one per frame)
+├─ P2P packet size: ~50 bytes (estimate, TBD)
+├─ Outgoing queue depth: Keep < 10 frames
+└─ No strict latency budget (runs in background)
+
+MEMORY:
+├─ Ring buffer: 13 KB
+├─ Peer endpoints: 1 KB
+├─ Outgoing queue: ~10 KB (max 10 frames)
+├─ Total overhead: ~25 KB
+└─ Zero additional allocation during gameplay
+
+LATENCY TARGET:
+├─ Frame-to-frame: < 100 ms (acceptable for action games)
+├─ P2P one-way: 15-50 ms (internet/LAN)
+├─ Server heartbeat: Async, not critical path
+└─ Dropout detection: 3+ seconds (acceptable)
+*/
+
